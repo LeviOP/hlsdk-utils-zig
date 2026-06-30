@@ -3,6 +3,7 @@ const std = @import("std");
 const c = @import("c");
 
 const Bsp = @import("bspfile.zig");
+const MAXLIGHTMAPS = Bsp.MAXLIGHTMAPS;
 const parseEntities = Bsp.parseEntities;
 const mathlib = @import("mathlib.zig");
 const dotProduct = mathlib.dotProduct;
@@ -37,7 +38,6 @@ const MAX_MAP_LEAFS = 8192;
 const MAX_MAP_FACES = 65535;
 const MAX_MAP_EDGES = 256000;
 const MAX_PATCHES = 65536;
-const MAXLIGHTMAPS = 4;
 const TEX_SPECIAL = 1;
 const SINGLEMAP = 18 * 18 * 4;
 const MAX_TRI_POINTS = 2048;
@@ -957,7 +957,7 @@ fn calcFaceExtents(bsp: *const Bsp, l: *LightInfo) !void {
     var mins: [2]f32 = @splat(999999);
     var maxs: [2]f32 = @splat(-99999);
 
-    const texinfo = &bsp.texinfo[face.texinfo];
+    const texinfo = &bsp.texinfo[@intCast(face.texinfo)];
 
     for (0..face.numedges) |i| {
         const surfedge = bsp.surfedges[face.firstedge + i];
@@ -1099,7 +1099,11 @@ fn getPhongNormal(state: *State, bsp: *const Bsp, facenum: usize, spot: Vec3) Ve
 
         for (0..numedges) |j| {
             const e = bsp.surfedges[firstedge + j];
-            const e1 = bsp.surfedges[firstedge + ((j + numedges - 1) % numedges)];
+            // Original qrad C indexed with `f->firstedge + ((j-1)%f->numedges)`, which would
+            // evaluate to `firstedge -1 % numedges` at j = 0. `-1 % n` evaluates to -1 no matter
+            // what, meaning we take `firstedge - 1` at the zeroth index. This is a bug that we
+            // faithfully replicate.
+            const e1 = bsp.surfedges[@as(usize, @intCast(@as(i64, @intCast(firstedge + j)) - 1))];
             const e2 = bsp.surfedges[firstedge + ((j + 1) % numedges)];
 
             const es = &state.edgeshare[@intCast(@abs(e))];
@@ -1234,7 +1238,7 @@ fn gatherSampleLight(
     sample: *[MAXLIGHTMAPS]Vec3,
     styles: *[MAXLIGHTMAPS]u8,
 ) !void {
-    var sky_used: ?*const DirectLight = null;
+    var maybe_sky_used: ?*const DirectLight = null;
 
     for (1..bsp.leafs.len) |i| {
         if ((pvs[(i - 1) >> 3] & (@as(u8, 1) << @intCast((i - 1) & 7))) == 0)
@@ -1247,8 +1251,8 @@ fn gatherSampleLight(
             var add: Vec3 = @splat(0);
 
             if (l.type == .skylight) {
-                if (sky_used != null) continue;
-                sky_used = l;
+                if (maybe_sky_used != null) continue;
+                maybe_sky_used = l;
 
                 const dot = -dotProduct(normal, l.normal);
                 if (dot <= ON_EPSILON / 10.0) continue;
@@ -1295,10 +1299,10 @@ fn gatherSampleLight(
                 continue;
 
             // find or allocate a style slot
-            var style_index: usize = MAXLIGHTMAPS;
-            for (0..MAXLIGHTMAPS) |si| {
-                if (styles[si] == l.style or styles[si] == 255) {
-                    style_index = si;
+            var style_index: usize = 0;
+            for (styles, 0..) |style, index| {
+                if (style == l.style or style == 255) {
+                    style_index = index;
                     break;
                 }
             }
@@ -1316,9 +1320,9 @@ fn gatherSampleLight(
     }
 
     // indirect sunlight
-    if (sky_used != null and indirect_sun != 0.0) {
-        const l = sky_used.?;
-        const sky_intensity = l.intensity * @as(Vec3, @splat(indirect_sun / @as(f32, NUMVERTEXNORMALS * 2)));
+    if (maybe_sky_used != null and indirect_sun != 0.0) {
+        const sky_used = maybe_sky_used.?;
+        const sky_intensity = sky_used.intensity * @as(Vec3, @splat(indirect_sun / @as(f32, NUMVERTEXNORMALS * 2)));
         var total: Vec3 = @splat(0);
 
         for (r_avertexnormals) |anorm| {
@@ -1332,10 +1336,10 @@ fn gatherSampleLight(
         }
 
         if (vectorMaximum(total) > 0) {
-            var style_index: usize = MAXLIGHTMAPS;
-            for (0..MAXLIGHTMAPS) |si| {
-                if (styles[si] == l.style or styles[si] == 255) {
-                    style_index = si;
+            var style_index: usize = 0;
+            for (styles, 0..) |style, index| {
+                if (style == sky_used.style or style == 255) {
+                    style_index = index;
                     break;
                 }
             }
@@ -1346,7 +1350,7 @@ fn gatherSampleLight(
                 return;
             }
             if (styles[style_index] == 255)
-                styles[style_index] = @intCast(l.style);
+                styles[style_index] = @intCast(sky_used.style);
 
             sample[style_index] += total;
         }
@@ -1381,13 +1385,13 @@ fn addSampleToPatch(state: *State, s: *const Sample, facenum: usize) void {
 fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, face_num: usize) !void {
     var face = &bsp.faces[face_num];
 
+    // resetting face light info
     face.lightofs = -1;
-    for (0..MAXLIGHTMAPS) |i| {
-        face.styles[i] = 255;
-    }
+    face.styles = @splat(255);
 
-    if ((bsp.texinfo[face.texinfo].flags & TEX_SPECIAL) != 0) return;
+    if ((bsp.texinfo[@intCast(face.texinfo)].flags & TEX_SPECIAL) != 0) return;
 
+    // every face has style 0
     face.styles[0] = 0;
 
     var l: LightInfo = .{
@@ -1425,8 +1429,8 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
     for (0..l.numsurfpt) |i| {
         const spot = l.surfpt[i];
 
-        for (0..MAXLIGHTMAPS) |k| {
-            state.facelight[face_num].samples[k][i].pos = spot;
+        for (&state.facelight[face_num].samples) |style_samples| {
+            style_samples[i].pos = spot;
         }
 
         var pvs: [(MAX_MAP_LEAFS + 7) / 8]u8 = undefined;
@@ -1449,16 +1453,17 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
         var sampled: [MAXLIGHTMAPS]Vec3 = @splat(@as(Vec3, @splat(0)));
 
         if (extra) {
+            // TOOD: extra (used by valve)
             return error.ExtraNotImpl;
         } else {
             const pointnormal = getPhongNormal(state, bsp, face_num, spot);
             try gatherSampleLight(state, bsp, spot, &pvs, pointnormal, &sampled, &face.styles);
         }
 
-        for (0..MAXLIGHTMAPS) |j| {
-            if (face.styles[j] == 255) break;
+        for (&face.styles, 0..) |style, j| {
+            if (style == 255) break;
             state.facelight[face_num].samples[j][i].light = sampled[j];
-            if (face.styles[j] == 0) {
+            if (style == 0) {
                 addSampleToPatch(state, &state.facelight[face_num].samples[j][i], face_num);
             }
         }
@@ -1482,9 +1487,9 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
     // TODO: ambient
 
     // Add baselight (emissive texture self-illumination)
-    for (0..MAXLIGHTMAPS) |j| {
-        if (face.styles[j] == 255) break;
-        if (face.styles[j] == 0) {
+    for (&face.styles, 0..) |style, j| {
+        if (style == 255) break;
+        if (style == 0) {
             const first_patch_idx = state.face_patches.get(face_num).?.items[0];
             const baselight = state.patches.items[first_patch_idx].baselight;
             for (0..l.numsurfpt) |i| {

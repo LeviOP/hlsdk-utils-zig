@@ -26,6 +26,7 @@ pub const LUMP_MODELS = 14;
 pub const HEADER_LUMPS = 15;
 
 pub const MAX_MAP_HULLS = 4;
+pub const MAXLIGHTMAPS = 4;
 
 pub const MAX_KEY = 32;
 pub const MAX_VALUE = 1024;
@@ -316,7 +317,7 @@ pub const Face = extern struct {
     firstedge: u32,
     numedges: u16,
     texinfo: u16,
-    styles: [4]u8,
+    styles: [MAXLIGHTMAPS]u8,
     lightofs: i32,
 };
 
