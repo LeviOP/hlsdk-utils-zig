@@ -26,7 +26,7 @@ const smoothing_threshold = @cos(45.0 * (std.math.pi / 180.0));
 const maxchop = 64;
 const minchop = 64;
 const coring = 1.0;
-const extra = false;
+const extra = true;
 const indirect_sun = 1.0;
 const dlight_threshold = 25.0;
 
@@ -1453,8 +1453,46 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
         var sampled: [MAXLIGHTMAPS]Vec3 = @splat(@as(Vec3, @splat(0)));
 
         if (extra) {
-            // TOOD: extra (used by valve)
-            return error.ExtraNotImpl;
+            const weighting = [3][3]i32{ .{ 5, 9, 5 }, .{ 9, 16, 9 }, .{ 5, 9, 5 } };
+            var subsamples: i32 = 0;
+
+            var t: i32 = -1;
+            while (t <= 1) : (t += 1) {
+                var s: i32 = -1;
+                while (s <= 1) : (s += 1) {
+                    const subsample = @as(i32, @intCast(i)) + t * lightmap_width + s;
+                    const sample_s = @rem(@as(i32, @intCast(i)), lightmap_width);
+                    const sample_t = @divTrunc(@as(i32, @intCast(i)), lightmap_width);
+
+                    if (0 <= s + sample_s and s + sample_s < lightmap_width and
+                        0 <= t + sample_t and t + sample_t < lightmap_height)
+                    {
+                        var subsampled: [MAXLIGHTMAPS]Vec3 = @splat(@as(Vec3, @splat(0)));
+
+                        // Calculate the point one third of the way toward the "subsample point"
+                        var pos = l.surfpt[i];
+                        pos += l.surfpt[i];
+                        pos += l.surfpt[@intCast(subsample)];
+                        pos *= @splat(1.0 / 3.0);
+
+                        const pointnormal = getPhongNormal(state, bsp, face_num, pos);
+                        try gatherSampleLight(state, bsp, pos, &pvs, pointnormal, &subsampled, &face.styles);
+
+                        for (&face.styles, 0..) |style, j| {
+                            if (style == 255) break;
+                            subsampled[j] *= @as(Vec3, @splat(@floatFromInt(weighting[@intCast(s + 1)][@intCast(t + 1)])));
+                            sampled[j] += subsampled[j];
+                        }
+
+                        subsamples += weighting[@intCast(s + 1)][@intCast(t + 1)];
+                    }
+                }
+            }
+
+            for (&face.styles, 0..) |style, j| {
+                if (style == 255) break;
+                sampled[j] *= @as(Vec3, @splat(1.0 / @as(f32, @floatFromInt(subsamples))));
+            }
         } else {
             const pointnormal = getPhongNormal(state, bsp, face_num, spot);
             try gatherSampleLight(state, bsp, spot, &pvs, pointnormal, &sampled, &face.styles);
