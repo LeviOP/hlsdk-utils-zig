@@ -3,9 +3,36 @@ const Io = std.Io;
 
 const c = @import("c");
 
+const qError = @import("cmdlib.zig").qError;
 const ScripLib = @import("scriplib.zig");
 const Vec3 = @import("mathlib.zig").Vec3;
-const qError = @import("cmdlib.zig").qError;
+
+pub const MAX_MAP_HULLS = 4;
+
+pub const MAX_MAP_MODELS = 400;
+pub const MAX_MAP_BRUSHES = 4096;
+pub const MAX_MAP_ENTITIES = 1024;
+pub const MAX_MAP_ENTSTRING = (128 * 1024);
+
+pub const MAX_MAP_PLANES = 32767;
+pub const MAX_MAP_NODES = 32767;
+pub const MAX_MAP_CLIPNODES = 32767;
+pub const MAX_MAP_LEAFS = 8192;
+pub const MAX_MAP_VERTS = 65535;
+pub const MAX_MAP_FACES = 65535;
+pub const MAX_MAP_MARKSURFACES = 65535;
+pub const MAX_MAP_TEXINFO = 8192;
+pub const MAX_MAP_EDGES = 256000;
+pub const MAX_MAP_SURFEDGES = 512000;
+pub const MAX_MAP_TEXTURES = 512;
+pub const MAX_MAP_MIPTEX = 0x200000;
+pub const MAX_MAP_LIGHTING = 0x200000;
+pub const MAX_MAP_VISIBILITY = 0x200000;
+
+pub const MAX_MAP_PORTALS = 65536;
+
+pub const MAX_KEY = 32;
+pub const MAX_VALUE = 1024;
 
 pub const BSPVERSION = 30;
 
@@ -26,12 +53,7 @@ pub const LUMP_SURFEDGES = 13;
 pub const LUMP_MODELS = 14;
 pub const HEADER_LUMPS = 15;
 
-pub const MAX_MAP_HULLS = 4;
-pub const MAX_MAP_ENTITIES = 1024;
 pub const MAXLIGHTMAPS = 4;
-
-pub const MAX_KEY = 32;
-pub const MAX_VALUE = 1024;
 
 pub const Bsp = @This();
 
@@ -46,7 +68,7 @@ nodes: []align(1) const Node,
 texinfo: []align(1) const Texinfo,
 faces: []align(1) Face,
 lightdata: []u8,
-clipnodes: []const u8,
+clipnodes: []align(1) const Clipnode,
 leafs: []align(1) const Leaf,
 marksurfaces: []align(1) const u16,
 edges: []align(1) const Edge,
@@ -111,13 +133,12 @@ pub fn init(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Bsp
 
         inline for (open_err_ints) |open_err| {
             if (err == open_err) {
-                return qError("Error opening {s}: {s}", .{filename, @errorName(err)}, err);
+                return qError("Error opening {s}: {s}", .{ filename, @errorName(err) }, err);
             }
         }
 
         return err;
     };
-
 
     if (bytes.len < @sizeOf(Header)) {
         allocator.free(bytes);
@@ -209,6 +230,85 @@ pub fn writeFile(self: *const Bsp, io: std.Io, filename: []const u8) !void {
 
     try writer.writeAll(header_bytes);
     try writer.flush();
+}
+
+fn arrayUsage(name: []const u8, items: usize, max_items: usize, item_size: usize) usize {
+    const percentage: f64 = if (max_items != 0)
+        @as(f64, @floatFromInt(items)) * 100.0 / @as(f64, @floatFromInt(max_items))
+    else
+        0.0;
+
+    std.debug.print("{s:<12}  {d:>7}/{d:<7}  {d:>7}/{d:<7}  ({d:>4.1}%)", .{
+        name,
+        items,
+        max_items,
+        items * item_size,
+        max_items * item_size,
+        percentage,
+    });
+
+    printFullnessWarning(percentage);
+
+    return items * item_size;
+}
+
+fn globUsage(name: []const u8, item_storage: usize, max_storage: usize) usize {
+    const percentage: f64 = if (max_storage != 0)
+        @as(f64, @floatFromInt(item_storage)) * 100.0 / @as(f64, @floatFromInt(max_storage))
+    else
+        0.0;
+
+    std.debug.print("{s:<12}     [variable]    {d:>7}/{d:<7}  ({d:>4.1}%)", .{
+        name,
+        item_storage,
+        max_storage,
+        percentage,
+    });
+
+    printFullnessWarning(percentage);
+
+    return item_storage;
+}
+
+fn printFullnessWarning(percentage: f64) void {
+    // Matches the C exactly, including the 95%/99.9% branches being
+    // unreachable dead code since 80% already catches everything above it.
+    if (percentage > 80.0) {
+        std.debug.print("VERY FULL!\n", .{});
+    } else if (percentage > 95.0) {
+        std.debug.print("SIZE DANGER!\n", .{});
+    } else if (percentage > 99.9) {
+        std.debug.print("SIZE OVERFLOW!!!\n", .{});
+    } else {
+        std.debug.print("\n", .{});
+    }
+}
+
+pub fn printFileSizes(self: *const Bsp) void {
+    var total_memory: usize = 0;
+
+    std.debug.print("\n", .{});
+    std.debug.print("Object names  Objects/Maxobjs  Memory / Maxmem  Fullness\n", .{});
+    std.debug.print("------------  ---------------  ---------------  --------\n", .{});
+
+    total_memory += arrayUsage("models", self.models.len, MAX_MAP_MODELS, @sizeOf(Model));
+    total_memory += arrayUsage("planes", self.planes.len, MAX_MAP_PLANES, @sizeOf(Plane));
+    total_memory += arrayUsage("vertexes", self.vertexes.len, MAX_MAP_VERTS, @sizeOf(Vertex));
+    total_memory += arrayUsage("nodes", self.nodes.len, MAX_MAP_NODES, @sizeOf(Node));
+    total_memory += arrayUsage("texinfos", self.texinfo.len, MAX_MAP_TEXINFO, @sizeOf(Texinfo));
+    total_memory += arrayUsage("faces", self.faces.len, MAX_MAP_FACES, @sizeOf(Face));
+    total_memory += arrayUsage("clipnodes", self.clipnodes.len, MAX_MAP_CLIPNODES, @sizeOf(Clipnode));
+    total_memory += arrayUsage("leaves", self.leafs.len, MAX_MAP_LEAFS, @sizeOf(Leaf));
+    total_memory += arrayUsage("marksurfaces", self.marksurfaces.len, MAX_MAP_MARKSURFACES, @sizeOf(u16));
+    total_memory += arrayUsage("surfedges", self.surfedges.len, MAX_MAP_SURFEDGES, @sizeOf(i32));
+    total_memory += arrayUsage("edges", self.edges.len, MAX_MAP_EDGES, @sizeOf(Edge));
+
+    total_memory += globUsage("texdata", self.texdata.len, MAX_MAP_MIPTEX);
+    total_memory += globUsage("lightdata", self.lightdata.len, MAX_MAP_LIGHTING);
+    total_memory += globUsage("visdata", self.visdata.len, MAX_MAP_VISIBILITY);
+    total_memory += globUsage("entdata", self.entdata.len, MAX_MAP_ENTSTRING);
+
+    std.debug.print("=== Total BSP file data space used: {d} bytes ===\n", .{total_memory});
 }
 
 pub const Epair = struct {
@@ -347,6 +447,11 @@ pub const Face = extern struct {
     texinfo: u16,
     styles: [MAXLIGHTMAPS]u8,
     lightofs: i32,
+};
+
+pub const Clipnode = extern struct {
+    planenum: i32,
+    children: [2]i16,
 };
 
 pub const Leaf = extern struct {

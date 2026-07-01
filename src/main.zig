@@ -1,12 +1,13 @@
 const std = @import("std");
-const c = @import("c");
-const b = @import("build");
 
+const b = @import("build");
+const c = @import("c");
+
+const Bsp = @import("bspfile.zig");
 const cmdlib = @import("cmdlib.zig");
 const qError = cmdlib.qError;
 const handleQError = cmdlib.handleQError;
 const MAX_PATH = cmdlib.MAX_PATH;
-const Bsp = @import("bspfile.zig");
 const qrad = @import("qrad.zig");
 const State = qrad.State;
 const readLightFile = qrad.readLightFile;
@@ -28,7 +29,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     var designer_lights: []const u8 = "";
 
-    std.debug.print("qrad.exe v1.5 ({s})\n", .{b.__DATE__});
+    std.debug.print("qrad.exe v 1.5 ({s})\n", .{b.__DATE__});
     std.debug.print("----- Radiosity ----\n", .{});
 
     state.verbose = true;
@@ -244,6 +245,9 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     radWorld(allocator, state, &bsp) catch |e| return handleQError(e);
+
+    if (state.verbose)
+        bsp.printFileSizes();
 
     bsp.writeFile(io, source) catch |e| return handleQError(e);
 

@@ -17,7 +17,7 @@ fn formatCDate(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
 
     return try std.fmt.allocPrint(
         allocator,
-        "{s} {d:0>2} {d}",
+        "{s} {d:>2} {d}",
         .{
             month_names[month_day.month.numeric() - 1],
             month_day.day_index + 1,

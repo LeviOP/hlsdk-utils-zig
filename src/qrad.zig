@@ -1,7 +1,7 @@
 const std = @import("std");
+
 const c = @import("c");
 
-const qError = @import("cmdlib.zig").qError;
 const Bsp = @import("bspfile.zig");
 const MAXLIGHTMAPS = Bsp.MAXLIGHTMAPS;
 const parseEntities = Bsp.parseEntities;
@@ -15,6 +15,7 @@ const vectorCompare = mathlib.vectorCompare;
 const vectorAvg = mathlib.vectorAvg;
 const crossProduct = mathlib.crossProduct;
 const Vec3 = mathlib.Vec3;
+const qError = @import("cmdlib.zig").qError;
 const r_avertexnormals = @import("anorms.zig").r_avertexnormals;
 
 const vec3_origin: Vec3 = .{ 0, 0, 0 };
@@ -2448,7 +2449,7 @@ pub fn readLightFile(allocator: std.mem.Allocator, io: std.Io, state: *State, fi
             b *= i / 255.0;
         } else if (arg_count != 4) {
             if (scan.len > 4)
-                std.debug.print("ignoring bad texlight '{s}' in {s}", .{scan, filename});
+                std.debug.print("ignoring bad texlight '{s}' in {s}", .{ scan, filename });
             continue;
         }
 
@@ -2480,5 +2481,5 @@ pub fn readLightFile(allocator: std.mem.Allocator, io: std.Io, state: *State, fi
 
     state.texlights = try texlights.toOwnedSlice(allocator);
 
-    state.print("[{d} texlights parsed from '{s}']\n\n", .{file_texlights, filename});
+    state.print("[{d} texlights parsed from '{s}']\n\n", .{ file_texlights, filename });
 }
