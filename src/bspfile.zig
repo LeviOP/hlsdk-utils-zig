@@ -5,6 +5,7 @@ const c = @import("c");
 
 const ScripLib = @import("scriplib.zig");
 const Vec3 = @import("mathlib.zig").Vec3;
+const qerror = @import("cmdlib.zig").qerror;
 
 pub const BSPVERSION = 30;
 
@@ -26,6 +27,7 @@ pub const LUMP_MODELS = 14;
 pub const HEADER_LUMPS = 15;
 
 pub const MAX_MAP_HULLS = 4;
+pub const MAX_MAP_ENTITIES = 1024;
 pub const MAXLIGHTMAPS = 4;
 
 pub const MAX_KEY = 32;
@@ -107,7 +109,7 @@ pub fn init(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Bsp
     const header: *const Header = @ptrCast(@alignCast(bytes.ptr));
 
     if (header.version != 30) {
-        return error.WrongVersion;
+        return qerror("{s} is version {d}, not {d}", .{filename, header.version, BSPVERSION}, error.WrongVersion);
     }
 
     var bsp: Bsp = undefined;
@@ -118,7 +120,7 @@ pub fn init(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Bsp
         const T = std.meta.Child(Slice);
 
         @field(bsp, info.field) =
-            lumpSlice(T, bytes, header.lumps[info.lump]);
+            try lumpSlice(T, bytes, header.lumps[info.lump]);
     }
 
     return bsp;
@@ -128,9 +130,14 @@ pub fn deinit(self: *const Bsp, allocator: std.mem.Allocator) void {
     allocator.free(self.bytes);
 }
 
-fn lumpSlice(comptime T: type, data: []u8, lump: Lump) []align(1) T {
+fn lumpSlice(comptime T: type, data: []u8, lump: Lump) ![]align(1) T {
     const start: usize = @intCast(lump.fileofs);
-    const end: usize = start + @as(usize, @intCast(lump.filelen));
+    const length: usize = @intCast(lump.filelen);
+
+    if (length % @sizeOf(T) != 0)
+        return qerror("LoadBSPFile: odd lump size", .{}, error.OddLumpSize);
+
+    const end = start + length;
     return std.mem.bytesAsSlice(T, data[start..end]);
 }
 
@@ -202,6 +209,7 @@ pub const Entity = struct {
         allocator.free(self.epairs);
     }
 
+    // Needs to be 0 sentinel'd so that it works with c functions
     pub fn valueForKey(self: Entity, key: []const u8) ?[:0]const u8 {
         for (self.epairs) |epair| {
             if (std.mem.eql(u8, epair.key, key)) return epair.value;
@@ -226,10 +234,10 @@ pub const Entity = struct {
 };
 
 fn parseEpair(allocator: std.mem.Allocator, script: *ScripLib) !Epair {
-    if (script.currentToken().len >= MAX_KEY - 1) return error.TokenTooLong;
+    if (script.currentToken().len >= MAX_KEY - 1) return qerror("ParseEpar: token too long", .{}, error.TokenTooLong);
     const key = try allocator.dupe(u8, script.currentToken());
     _ = try script.getToken(false);
-    if (script.currentToken().len >= MAX_VALUE - 1) return error.TokenTooLong;
+    if (script.currentToken().len >= MAX_VALUE - 1) return qerror("ParseEpar: token too long", .{}, error.TokenTooLong);
     const value = try allocator.dupeSentinel(u8, script.currentToken(), 0);
 
     return .{
@@ -240,12 +248,14 @@ fn parseEpair(allocator: std.mem.Allocator, script: *ScripLib) !Epair {
 
 fn parseEntity(allocator: std.mem.Allocator, script: *ScripLib, entities: *std.ArrayList(Entity)) !bool {
     if (!try script.getToken(true)) return false;
-    if (!std.mem.eql(u8, script.currentToken(), "{")) return error.ExpectedOpenBrace;
+    if (!std.mem.eql(u8, script.currentToken(), "{")) return qerror("ParseEntity: {{ not found", .{}, error.ExpectedOpenBrace);
+
+    if (entities.items.len == MAX_MAP_ENTITIES) return qerror("num_entities == MAX_MAP_ENTITIES", .{}, error.MaxMapEntities);
 
     var epairs = std.ArrayList(Epair).empty;
 
     while (true) {
-        if (!try script.getToken(true)) return error.UnexpectedEof;
+        if (!try script.getToken(true)) return qerror("ParseEntity: EOF without closing brace", .{}, error.UnexpectedEof);
         if (std.mem.eql(u8, script.currentToken(), "}")) break;
 
         try epairs.append(allocator, try parseEpair(allocator, script));

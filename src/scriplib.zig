@@ -1,3 +1,5 @@
+const qerror = @import("cmdlib.zig").qerror;
+
 const MAXTOKEN = 512;
 
 const ScripLib = @This();
@@ -31,7 +33,7 @@ pub fn ungetToken(self: *ScripLib) void {
 }
 
 pub fn endOfScript(self: *ScripLib, crossline: bool) !bool {
-    if (!crossline) return error.LineIncomplete;
+    if (!crossline) return qerror("Line {d} is incomplete\n", .{self.line}, error.LineIncomplete);
     self.end_of_script = true;
     return false;
 }
@@ -49,7 +51,7 @@ pub fn getToken(self: *ScripLib, crossline: bool) !bool {
     skipspace: while (true) {
         while (self.pos < self.buffer.len and self.buffer[self.pos] <= ' ') {
             if (self.buffer[self.pos] == '\n') {
-                if (!crossline) return error.LineIncomplete;
+                if (!crossline) return qerror("Line {d} is incomplete\n", .{self.line}, error.LineIncomplete);
                 self.line += 1;
             }
             self.pos += 1;
@@ -63,7 +65,7 @@ pub fn getToken(self: *ScripLib, crossline: bool) !bool {
         if (c == ';' or c == '#' or
             (c == '/' and self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '/'))
         {
-            if (!crossline) return error.LineIncomplete;
+            if (!crossline) return qerror("Line {d} is incomplete\n", .{self.line}, error.LineIncomplete);
             while (self.pos < self.buffer.len and self.buffer[self.pos] != '\n')
                 self.pos += 1;
             continue :skipspace;
@@ -79,7 +81,7 @@ pub fn getToken(self: *ScripLib, crossline: bool) !bool {
     if (self.buffer[self.pos] == '"') {
         self.pos += 1;
         while (self.pos < self.buffer.len and self.buffer[self.pos] != '"') {
-            if (self.token_len >= MAXTOKEN) return error.TokenTooLarge;
+            if (self.token_len >= MAXTOKEN) return qerror("Token too large on line {d}", .{self.line}, error.TokenTooLarge);
             self.token[self.token_len] = self.buffer[self.pos];
             self.token_len += 1;
             self.pos += 1;
@@ -90,7 +92,7 @@ pub fn getToken(self: *ScripLib, crossline: bool) !bool {
             self.buffer[self.pos] > ' ' and
             self.buffer[self.pos] != ';')
         {
-            if (self.token_len >= MAXTOKEN) return error.TokenTooLarge;
+            if (self.token_len >= MAXTOKEN) return qerror("Token too large on line {d}", .{self.line}, error.TokenTooLarge);
             self.token[self.token_len] = self.buffer[self.pos];
             self.token_len += 1;
             self.pos += 1;
