@@ -1,7 +1,7 @@
 const std = @import("std");
 const c = @import("c");
 
-const qerror = @import("cmdlib.zig").qerror;
+const qError = @import("cmdlib.zig").qError;
 const Bsp = @import("bspfile.zig");
 const MAXLIGHTMAPS = Bsp.MAXLIGHTMAPS;
 const parseEntities = Bsp.parseEntities;
@@ -35,6 +35,7 @@ const ANGLE_UP = -1;
 const ANGLE_DOWN = -2;
 const TRANSFER_SCALE = (1.0 / @as(f32, 16384));
 const INVERSE_TRANSFER_SCALE = 16384;
+const MAX_TEXLIGHTS = 128;
 
 fn makeBackplanes(allocator: std.mem.Allocator, bsp: *const Bsp) ![]Bsp.Plane {
     const backplanes = try allocator.alloc(Bsp.Plane, bsp.planes.len);
@@ -244,8 +245,10 @@ fn windingBounds(winding: *const Winding) struct { Vec3, Vec3 } {
 }
 
 fn lightForTexture(state: *State, name: [16]u8) Vec3 {
+    const name_trimmed = std.mem.sliceTo(&name, 0);
     for (state.texlights) |texlight| {
-        if (std.ascii.eqlIgnoreCase(&name, &texlight.name)) {
+        const tex_name_trimmed = std.mem.sliceTo(&texlight.name, 0);
+        if (std.ascii.eqlIgnoreCase(name_trimmed, tex_name_trimmed)) {
             return texlight.value;
         }
     }
@@ -418,7 +421,7 @@ fn makePatches(
             }
 
             if (patches.items.len >= MAX_PATCHES)
-                return qerror("num_patches == MAX_PATCHES", .{}, error.MaxPatches);
+                return qError("num_patches == MAX_PATCHES", .{}, error.MaxPatches);
 
             const patch = makePatchForFace(state, bsp, face_num, winding, &totalarea) orelse {
                 winding.deinit(allocator);
@@ -549,9 +552,9 @@ fn clipWinding(
     }
 
     if (f.items.len > maxpts or b.items.len > maxpts)
-        return qerror("ClipWinding: points exceed estimate", .{}, error.ClipWindingPointsExceededEstimate);
+        return qError("ClipWinding: points exceed estimate", .{}, error.ClipWindingPointsExceededEstimate);
     if (f.items.len > MAX_POINTS_ON_WINDING or b.items.len > MAX_POINTS_ON_WINDING)
-        return qerror("ClipWinding: MAX_POINTS_ON_WINDING", .{}, error.ClipWindingTooManyPoints);
+        return qError("ClipWinding: MAX_POINTS_ON_WINDING", .{}, error.ClipWindingTooManyPoints);
 
     in.deinit(allocator);
 
@@ -583,7 +586,7 @@ fn subdividePatch(allocator: std.mem.Allocator, state: *State, patch_index: usiz
     if (!subdivide_it) return;
 
     if (state.patches.items.len == MAX_PATCHES)
-        return qerror("MAX_PATCHES", .{}, error.MaxPatches);
+        return qError("MAX_PATCHES", .{}, error.MaxPatches);
 
     var split = vec3_origin;
     const dist = switch (widest_axis) {
@@ -916,7 +919,7 @@ fn calcFaceVectors(bsp: *const Bsp, l: *LightInfo) !void {
 
     var distscale = dotProduct(texnormal, l.facenormal);
     if (distscale == 0)
-        return qerror("Texture axis perpendicular to face", .{}, error.TextureAxisPerpToFace);
+        return qError("Texture axis perpendicular to face", .{}, error.TextureAxisPerpToFace);
 
     if (distscale < 0) {
         distscale = -distscale;
@@ -979,7 +982,7 @@ fn calcFaceExtents(bsp: *const Bsp, l: *LightInfo) !void {
         l.texmins[i] = @trunc(mins[i]);
         l.texsize[i] = @trunc(maxs[i] - mins[i]);
         if (l.texsize[i] > 17)
-            return qerror("Bad surface extents", .{}, error.BadSurfaceExtents);
+            return qError("Bad surface extents", .{}, error.BadSurfaceExtents);
     }
 }
 
@@ -1406,7 +1409,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
 
     const size = lightmap_width * lightmap_height;
     if (size > SINGLEMAP)
-        return qerror("Bad lightmap size", .{}, error.BadLightmapSize);
+        return qError("Bad lightmap size", .{}, error.BadLightmapSize);
 
     for (&state.facelight[face_num].samples) |*samples| {
         samples.* = try allocator.alloc(Sample, l.numsurfpt);
@@ -1433,7 +1436,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
             thisoffset = leaf.visofs;
             if (i == 0 or thisoffset != lastoffset) {
                 if (thisoffset == -1)
-                    return qerror("leaf->visofs == -1", .{}, error.LeafVisofsNegativeOne);
+                    return qError("leaf->visofs == -1", .{}, error.LeafVisofsNegativeOne);
 
                 decompressVis(bsp, bsp.visdata[@intCast(leaf.visofs)..].ptr, &pvs);
             }
@@ -1684,7 +1687,7 @@ fn makeScales(allocator: std.mem.Allocator, state: *State, vismatrix: []const u8
             scale *= -dotProduct(delta, patch2.normal);
 
             var trans = scale / (dist * dist);
-            if (trans < -ON_EPSILON) return qerror("transfer < 0", .{}, error.NegativeTransfer);
+            if (trans < -ON_EPSILON) return qError("transfer < 0", .{}, error.NegativeTransfer);
 
             var send = trans * patch2.area;
             if (send > 0.4) {
@@ -1775,7 +1778,7 @@ fn swapTransfersTask(state: *State, patchnum: usize) !void {
         }
 
         if (!found) {
-            return qerror("Didn't match transfer", .{}, error.DidntMatchTransfer);
+            return qError("Didn't match transfer", .{}, error.DidntMatchTransfer);
         }
     }
 }
@@ -1887,7 +1890,7 @@ const Triangulation = struct {
 
     fn addPatch(self: *Triangulation, allocator: std.mem.Allocator, patch: *Patch) !void {
         if (self.points.items.len == MAX_TRI_POINTS)
-            return qerror("trian->numpoints == MAX_TRI_POITNS", .{}, error.MaxTriPoints);
+            return qError("trian->numpoints == MAX_TRI_POITNS", .{}, error.MaxTriPoints);
 
         try self.points.append(allocator, patch);
     }
@@ -1917,7 +1920,7 @@ fn findEdge(allocator: std.mem.Allocator, trian: *Triangulation, points: EdgePoi
         return index;
 
     if (trian.edges.items.len > MAX_TRI_EDGES - 2)
-        return qerror("trian->numedges > MAX_TRI_EDGES-2", .{}, error.MaxTriEdges);
+        return qError("trian->numedges > MAX_TRI_EDGES-2", .{}, error.MaxTriEdges);
 
     const v1 = vectorNormalize(trian.points.items[points.p0].origin - trian.points.items[points.p1].origin);
     const normal = crossProduct(v1, trian.plane.normal);
@@ -2146,7 +2149,7 @@ fn sampleTriangulation(point: Vec3, trian: *Triangulation, last_tri_index: *?usi
     }
 
     if (p1 == null)
-        return qerror("SampleTriangulation: no points", .{}, error.SampleTriangulationNoPoints);
+        return qError("SampleTriangulation: no points", .{}, error.SampleTriangulationNoPoints);
 
     return p1.?.totallight;
 }
@@ -2252,8 +2255,9 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
 }
 
 const TexLight = struct {
-    name: [16]u8,
+    name: [256]u8,
     value: Vec3,
+    filename: []u8,
 };
 
 const Sample = struct {
@@ -2313,6 +2317,10 @@ pub const State = struct {
 
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
         self.face_entity.deinit(allocator);
+        for (self.texlights) |texlight| {
+            allocator.free(texlight.filename);
+        }
+        allocator.free(self.texlights);
     }
 };
 
@@ -2400,4 +2408,77 @@ pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
     for (0..bsp.faces.len) |face_num| {
         try finalLightFace(allocator, state, bsp, face_num);
     }
+}
+
+pub fn readLightFile(allocator: std.mem.Allocator, io: std.Io, state: *State, filename: []const u8) !void {
+    const file = std.Io.Dir.cwd().openFile(io, filename, .{ .mode = .read_only }) catch |err| {
+        return qError("ERROR: Couldn't open texlight file {s}", .{filename}, err);
+    };
+    defer file.close(io);
+
+    std.debug.print("[Reading texlights from '{s}']\n", .{filename});
+
+    var texlights = std.ArrayList(TexLight).fromOwnedSlice(state.texlights);
+
+    var scan_buf: [128]u8 = undefined;
+
+    var file_texlights: usize = 0;
+
+    var reader = file.reader(io, &scan_buf);
+    while (try reader.interface.takeDelimiter('\n')) |line| {
+        if (texlights.items.len == MAX_TEXLIGHTS)
+            return qError("MAX_TEXLIGHTS", .{}, error.MaxTexlights);
+
+        const scan = try allocator.dupeSentinel(u8, line, 0);
+        defer allocator.free(scan);
+
+        var texlight: [256]u8 = undefined;
+        var r: f32 = 1;
+        var g: f32 = 1;
+        var b: f32 = 1;
+        var i: f32 = 1;
+        const arg_count = c.sscanf(scan, "%s %f %f %f %f", &texlight, &r, &g, &b, &i);
+
+        if (arg_count == 2) {
+            g = r;
+            b = r;
+        } else if (arg_count == 5) {
+            r *= i / 255.0;
+            g *= i / 255.0;
+            b *= i / 255.0;
+        } else if (arg_count != 4) {
+            if (scan.len > 4)
+                std.debug.print("ignoring bad texlight '{s}' in {s}", .{scan, filename});
+            continue;
+        }
+
+        const new_filename = try allocator.dupe(u8, filename);
+
+        for (texlights.items) |*existing| {
+            if (std.mem.eql(u8, &texlight, &existing.name)) {
+                if (std.mem.eql(u8, existing.filename, filename)) {
+                    std.debug.print("ERROR\x07: Duplication of '{s}' in file '{s}'!\n", .{ existing.name, existing.filename });
+                } else if (existing.value[0] != r or existing.value[1] != g or existing.value[2] != b) {
+                    std.debug.print("Warning: Overriding '{s}' from '{s}' with '{s}'!\n", .{ existing.name, existing.filename, filename });
+                } else {
+                    std.debug.print("Warning: Redundant '{s}' def in '{s}' AND '{s}'!\n", .{ existing.name, existing.filename, filename });
+                }
+            }
+            allocator.free(existing.filename);
+            existing.value = .{ r, g, b };
+            existing.filename = new_filename;
+            break;
+        } else {
+            try texlights.append(allocator, .{
+                .name = texlight,
+                .value = .{ r, g, b },
+                .filename = new_filename,
+            });
+        }
+        file_texlights += 1;
+    }
+
+    state.texlights = try texlights.toOwnedSlice(allocator);
+
+    state.print("[{d} texlights parsed from '{s}']\n\n", .{file_texlights, filename});
 }

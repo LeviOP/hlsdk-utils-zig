@@ -5,7 +5,7 @@ const c = @import("c");
 
 const ScripLib = @import("scriplib.zig");
 const Vec3 = @import("mathlib.zig").Vec3;
-const qerror = @import("cmdlib.zig").qerror;
+const qError = @import("cmdlib.zig").qError;
 
 pub const BSPVERSION = 30;
 
@@ -99,7 +99,25 @@ const lump_fields = [_]LumpField{
 pub fn init(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Bsp {
     const cwd = Io.Dir.cwd();
 
-    const bytes = try cwd.readFileAlloc(io, filename, allocator, .unlimited);
+    const bytes = cwd.readFileAlloc(io, filename, allocator, .unlimited) catch |err| {
+        const open_err_ints = comptime blk: {
+            const set = @typeInfo(std.Io.File.OpenError).error_set.?;
+            var ints: [set.len]anyerror = undefined;
+            for (set, 0..) |member, i| {
+                ints[i] = @field(std.Io.File.OpenError, member.name);
+            }
+            break :blk ints;
+        };
+
+        inline for (open_err_ints) |open_err| {
+            if (err == open_err) {
+                return qError("Error opening {s}: {s}", .{filename, @errorName(err)}, err);
+            }
+        }
+
+        return err;
+    };
+
 
     if (bytes.len < @sizeOf(Header)) {
         allocator.free(bytes);
@@ -109,7 +127,7 @@ pub fn init(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Bsp
     const header: *const Header = @ptrCast(@alignCast(bytes.ptr));
 
     if (header.version != 30) {
-        return qerror("{s} is version {d}, not {d}", .{filename, header.version, BSPVERSION}, error.WrongVersion);
+        return qError("{s} is version {d}, not {d}", .{ filename, header.version, BSPVERSION }, error.WrongVersion);
     }
 
     var bsp: Bsp = undefined;
@@ -135,7 +153,7 @@ fn lumpSlice(comptime T: type, data: []u8, lump: Lump) ![]align(1) T {
     const length: usize = @intCast(lump.filelen);
 
     if (length % @sizeOf(T) != 0)
-        return qerror("LoadBSPFile: odd lump size", .{}, error.OddLumpSize);
+        return qError("LoadBSPFile: odd lump size", .{}, error.OddLumpSize);
 
     const end = start + length;
     return std.mem.bytesAsSlice(T, data[start..end]);
@@ -234,10 +252,10 @@ pub const Entity = struct {
 };
 
 fn parseEpair(allocator: std.mem.Allocator, script: *ScripLib) !Epair {
-    if (script.currentToken().len >= MAX_KEY - 1) return qerror("ParseEpar: token too long", .{}, error.TokenTooLong);
+    if (script.currentToken().len >= MAX_KEY - 1) return qError("ParseEpar: token too long", .{}, error.TokenTooLong);
     const key = try allocator.dupe(u8, script.currentToken());
     _ = try script.getToken(false);
-    if (script.currentToken().len >= MAX_VALUE - 1) return qerror("ParseEpar: token too long", .{}, error.TokenTooLong);
+    if (script.currentToken().len >= MAX_VALUE - 1) return qError("ParseEpar: token too long", .{}, error.TokenTooLong);
     const value = try allocator.dupeSentinel(u8, script.currentToken(), 0);
 
     return .{
@@ -248,14 +266,14 @@ fn parseEpair(allocator: std.mem.Allocator, script: *ScripLib) !Epair {
 
 fn parseEntity(allocator: std.mem.Allocator, script: *ScripLib, entities: *std.ArrayList(Entity)) !bool {
     if (!try script.getToken(true)) return false;
-    if (!std.mem.eql(u8, script.currentToken(), "{")) return qerror("ParseEntity: {{ not found", .{}, error.ExpectedOpenBrace);
+    if (!std.mem.eql(u8, script.currentToken(), "{")) return qError("ParseEntity: {{ not found", .{}, error.ExpectedOpenBrace);
 
-    if (entities.items.len == MAX_MAP_ENTITIES) return qerror("num_entities == MAX_MAP_ENTITIES", .{}, error.MaxMapEntities);
+    if (entities.items.len == MAX_MAP_ENTITIES) return qError("num_entities == MAX_MAP_ENTITIES", .{}, error.MaxMapEntities);
 
     var epairs = std.ArrayList(Epair).empty;
 
     while (true) {
-        if (!try script.getToken(true)) return qerror("ParseEntity: EOF without closing brace", .{}, error.UnexpectedEof);
+        if (!try script.getToken(true)) return qError("ParseEntity: EOF without closing brace", .{}, error.UnexpectedEof);
         if (std.mem.eql(u8, script.currentToken(), "}")) break;
 
         try epairs.append(allocator, try parseEpair(allocator, script));

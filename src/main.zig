@@ -2,10 +2,14 @@ const std = @import("std");
 const c = @import("c");
 const b = @import("build");
 
-const qerror = @import("cmdlib.zig").qerror;
+const cmdlib = @import("cmdlib.zig");
+const qError = cmdlib.qError;
+const handleQError = cmdlib.handleQError;
+const MAX_PATH = cmdlib.MAX_PATH;
 const Bsp = @import("bspfile.zig");
 const qrad = @import("qrad.zig");
 const State = qrad.State;
+const readLightFile = qrad.readLightFile;
 const radWorld = qrad.radWorld;
 
 pub fn main(init: std.process.Init) !u8 {
@@ -22,13 +26,13 @@ pub fn main(init: std.process.Init) !u8 {
         allocator.destroy(state);
     }
 
-    var designer_lights: []u8 = "";
+    var designer_lights: []const u8 = "";
 
     std.debug.print("qrad.exe v1.5 ({s})\n", .{b.__DATE__});
     std.debug.print("----- Radiosity ----\n", .{});
 
     state.verbose = true;
-    state.smoothing_threshold = @cos(45.0*(std.math.pi/180.0));
+    state.smoothing_threshold = @cos(45.0 * (std.math.pi / 180.0));
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -143,7 +147,9 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "-lights")) {
             i += 1;
             if (i < args.len and args[i].len > 0) {
-                designer_lights = try allocator.dupe(u8, args[i]);
+                if (args[i].len >= MAX_PATH)
+                    return error.PathCopyUnsafeOverflow;
+                designer_lights = args[i];
             } else {
                 std.debug.print("Error: expected a filepath after '-lights'\n", .{});
                 return 1;
@@ -203,14 +209,32 @@ pub fn main(init: std.process.Init) !u8 {
         state.maxlight = 255;
 
     if (i != args.len - 1) {
-        qerror("usage: qrad [-dump] [-inc] [-bounce n] [-threads n] [-verbose] [-terse] [-chop n] [-maxchop n] [-scale n] [-ambient red green blue] [-proj file] [-maxlight n] [-threads n] [-lights file] [-gamma n] [-dlight n] [-extra] [-smooth n] [-coring n] [-notexscale] bspfile", .{}, error.None) catch {};
-        return 1;
+        qError("usage: qrad [-dump] [-inc] [-bounce n] [-threads n] [-verbose] [-terse] [-chop n] [-maxchop n] [-scale n] [-ambient red green blue] [-proj file] [-maxlight n] [-threads n] [-lights file] [-gamma n] [-dlight n] [-extra] [-smooth n] [-coring n] [-notexscale] bspfile", .{}, error.QError) catch return 1;
     }
 
-    const source = try allocator.dupe(u8, args[i]);
+    if (args[i].len >= MAX_PATH) return error.PathCopyUnsafeOverflow;
+    var source = cmdlib.stripExtension(args[i]);
+
+    const exe_dir = try std.process.executableDirPathAlloc(io, allocator);
+    defer allocator.free(exe_dir);
+    const global_lights = try std.fs.path.join(allocator, &.{ exe_dir, "lights.rad" });
+    defer allocator.free(global_lights);
+
+    var level_lights = try std.mem.concat(allocator, u8, &.{ source, ".rad" });
+    std.Io.Dir.cwd().access(io, level_lights, .{ .read = true }) catch {
+        allocator.free(level_lights);
+        level_lights = &.{};
+    };
+    defer allocator.free(level_lights);
+
+    readLightFile(allocator, io, state, global_lights) catch |e| return handleQError(e);
+    if (designer_lights.len != 0) readLightFile(allocator, io, state, designer_lights) catch |e| return handleQError(e);
+    if (level_lights.len != 0) readLightFile(allocator, io, state, level_lights) catch |e| return handleQError(e);
+
+    source = try cmdlib.defaultExtension(allocator, source, ".bsp");
     defer allocator.free(source);
 
-    var bsp = try Bsp.init(allocator, io, source);
+    var bsp = Bsp.init(allocator, io, source) catch |e| return handleQError(e);
     defer bsp.deinit(allocator);
 
     if (bsp.visdata.len == 0) {
@@ -219,9 +243,9 @@ pub fn main(init: std.process.Init) !u8 {
         state.ambient = @splat(0.1);
     }
 
-    try radWorld(allocator, state, &bsp);
+    radWorld(allocator, state, &bsp) catch |e| return handleQError(e);
 
-    try bsp.writeFile(io, source);
+    bsp.writeFile(io, source) catch |e| return handleQError(e);
 
     return 0;
 }
