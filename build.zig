@@ -28,7 +28,7 @@ fn formatCDate(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    const optimize = b.standardOptimizeOption(.{});
 
     const translate_c = b.addTranslateC(.{
         .root_source_file = b.path("src/c.h"),

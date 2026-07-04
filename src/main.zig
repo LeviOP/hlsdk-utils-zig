@@ -245,6 +245,7 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     radWorld(allocator, state, &bsp) catch |e| return handleQError(e);
+    defer allocator.free(bsp.lightdata); // free new lightdata
 
     if (state.verbose)
         bsp.printFileSizes();

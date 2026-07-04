@@ -271,8 +271,7 @@ fn globUsage(name: []const u8, item_storage: usize, max_storage: usize) usize {
 }
 
 fn printFullnessWarning(percentage: f64) void {
-    // Matches the C exactly, including the 95%/99.9% branches being
-    // unreachable dead code since 80% already catches everything above it.
+    // 95 and 99 cases cannot be reached (matching original c)
     if (percentage > 80.0) {
         std.debug.print("VERY FULL!\n", .{});
     } else if (percentage > 95.0) {

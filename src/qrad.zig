@@ -68,15 +68,16 @@ fn makeParents(state: *State, bsp: *const Bsp, nodenum: i32, parent: i32) void {
 }
 
 pub const TNode = struct {
-    type: i32,
-    normal: [3]f32,
-    dist: f32,
-    children: [2]i32,
-    pad: i32,
+    type: i32 = 0,
+    normal: [3]f32 = @splat(0),
+    dist: f32 = 0,
+    children: [2]i32 = @splat(0),
+    pad: i32 = 0,
 };
 
 fn makeTNodes(allocator: std.mem.Allocator, bsp: *const Bsp) ![]TNode {
     const tnodes = try allocator.alloc(TNode, bsp.nodes.len + 1);
+    @memset(tnodes, .{});
 
     var next: usize = 0;
     makeTNode(tnodes, bsp, 0, &next);
@@ -436,7 +437,7 @@ fn makePatches(
         }
     }
 
-    state.print("{d} sqare feet [{d:.2} square inches]\n", .{ @as(i32, @intFromFloat(totalarea / 144)), totalarea });
+    state.print("{d} square feet [{d:.2} square inches]\n", .{ @as(i32, @intFromFloat(totalarea / 144)), totalarea });
 
     return patches;
 }
@@ -694,13 +695,13 @@ const EmitType = enum {
 };
 
 const DirectLight = struct {
-    type: EmitType,
-    style: i32,
-    origin: Vec3,
-    intensity: Vec3,
-    normal: Vec3,
-    stopdot: f32,
-    stopdot2: f32,
+    type: EmitType = .surface,
+    style: i32 = 0,
+    origin: Vec3 = @splat(0),
+    intensity: Vec3 = @splat(0),
+    normal: Vec3 = @splat(0),
+    stopdot: f32 = 0,
+    stopdot2: f32 = 0,
 };
 
 fn pointInLeaf(bsp: *const Bsp, point: Vec3) *align(1) const Bsp.Leaf {
@@ -761,6 +762,7 @@ fn createDirectLights(
         const leaf_direct_lights = (try lights_map.getOrPutValue(allocator, leaf, std.ArrayList(DirectLight).empty)).value_ptr;
 
         const dl = try leaf_direct_lights.addOne(allocator);
+        dl.* = .{};
         dl.origin = origin;
 
         dl.style = @trunc(e.floatForKey("style"));
@@ -1420,14 +1422,18 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
     var thisoffset: i32 = -1;
     var lastoffset: i32 = -1;
 
+    // If this is defined inside the loop, it will be filled with different garabge data on
+    // every loop run, being even more unpredictable (or garbage data filled with 0xAA in
+    // zig's debug modes) than if we reuse the same buffer every single time. Debugging this
+    // took 3 days of 8 hour work sessions. Whoever wrote the original C code, I hate :-)
+    var pvs: [(MAX_MAP_LEAFS + 7) / 8]u8 = undefined;
+
     for (0..l.numsurfpt) |i| {
         const spot = l.surfpt[i];
 
         for (&state.facelight[face_num].samples) |style_samples| {
             style_samples[i].pos = spot;
         }
-
-        var pvs: [(MAX_MAP_LEAFS + 7) / 8]u8 = undefined;
 
         if (bsp.visdata.len == 0) {
             @memset(&pvs, 255);
@@ -1639,7 +1645,7 @@ fn buildVisMatrix(
     bsp: *const Bsp,
 ) ![]u8 {
     const num_patches = state.patches.items.len;
-    const count = (num_patches * (num_patches + 1) / 2 + 7) / 8;
+    const count = ((num_patches + 1) * (((num_patches + 1) + 15) / 16));
 
     state.print("visibility matrix: {d:.1} megs\n", .{@as(f32, @floatFromInt(count)) / (1024 * 1024.0)});
 
@@ -2190,22 +2196,21 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
         for (0..face.numedges) |j| {
             const surfedge = bsp.surfedges[@as(usize, @intCast(face.firstedge)) + j];
 
-            var es: *EdgeShare = undefined;
-            var face2: ?*align(1) const Bsp.Face = undefined;
-            if (surfedge > 0) {
-                es = &state.edgeshare[@intCast(surfedge)];
-                face2 = es.faces[1].?;
-            } else {
-                es = &state.edgeshare[@intCast(-surfedge)];
-                face2 = es.faces[0].?;
-            }
+            const es = if (surfedge > 0)
+                &state.edgeshare[@intCast(surfedge)]
+            else
+                &state.edgeshare[@intCast(-surfedge)];
 
             if (!es.coplanar and vectorCompare(vec3_origin, es.interface_normal))
                 continue;
 
-            // Divide by struct size to get an element index, not a byte offset
-            const face2_index = (@intFromPtr(face2) - @intFromPtr(bsp.faces.ptr)) / @sizeOf(Bsp.Face);
-            if (state.face_patches.get(face2_index)) |list| {
+            // must obtain face2 after above continue statement
+            const face2 = if (surfedge > 0)
+                es.faces[1].?
+            else
+                es.faces[0].?;
+
+            if (state.face_patches.get(face2-bsp.faces.ptr)) |list| {
                 for (list.items) |patch_index| {
                     const patch = &state.patches.items[patch_index];
                     try trian.addPatch(allocator, patch);
@@ -2433,7 +2438,8 @@ pub fn readLightFile(allocator: std.mem.Allocator, io: std.Io, state: *State, fi
         const scan = try allocator.dupeSentinel(u8, line, 0);
         defer allocator.free(scan);
 
-        var texlight: [256]u8 = undefined;
+        // splatting this so that the buffer is filled with 0s and can be later compared as an entire buffer. maybe we should just store strings as slices...
+        var texlight: [256]u8 = @splat(0);
         var r: f32 = 1;
         var g: f32 = 1;
         var b: f32 = 1;
