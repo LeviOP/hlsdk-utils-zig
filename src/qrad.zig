@@ -1658,11 +1658,11 @@ fn buildVisMatrix(
 }
 
 fn checkVisBit(vismatrix: []const u8, num_patches: usize, p1_in: usize, p2_in: usize) bool {
-    var p1 = p1_in;
-    var p2 = p2_in;
-    if (p1 > p2) std.mem.swap(usize, &p1, &p2);
+    const p1 = @min(p1_in, p2_in);
+    const p2 = @max(p1_in, p2_in);
     const bitpos = p1 * num_patches - (p1 * (p1 + 1)) / 2 + p2;
-    return (vismatrix[bitpos >> 3] & (@as(u8, 1) << @intCast(bitpos & 7))) != 0;
+    const shift: u3 = @intCast(bitpos & 7);
+    return (vismatrix[bitpos >> 3] & (@as(u8, 1) << shift)) != 0;
 }
 
 // TODO: make each call an iteration of thread, not one call for entire thread (matching gatherLight, etc)
