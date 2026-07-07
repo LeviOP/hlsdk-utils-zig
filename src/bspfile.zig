@@ -383,8 +383,8 @@ fn parseEntity(allocator: std.mem.Allocator, script: *ScripLib, entities: *std.A
     return true;
 }
 
-pub fn parseEntities(allocator: std.mem.Allocator, bsp: *const Bsp) ![]Entity {
-    var script = ScripLib.init(bsp.entdata);
+pub fn parseEntities(self: *const Bsp, allocator: std.mem.Allocator) ![]Entity {
+    var script = ScripLib.init(self.entdata);
     var entities = std.ArrayList(Entity).empty;
 
     while (try parseEntity(allocator, &script, &entities)) {}
@@ -402,10 +402,19 @@ pub const Header = extern struct {
     lumps: [HEADER_LUMPS]Lump = @splat(.{}),
 };
 
+pub const PlaneType = enum(i32) {
+    x = 0,
+    y = 1,
+    z = 2,
+    any_x = 3,
+    any_y = 4,
+    any_z = 5,
+};
+
 pub const Plane = extern struct {
     normal: [3]f32,
     dist: f32,
-    type: i32,
+    type: PlaneType,
 };
 
 pub const MiptexLump = extern struct {

@@ -38,20 +38,18 @@ const TRANSFER_SCALE = (1.0 / @as(f32, 16384));
 const INVERSE_TRANSFER_SCALE = 16384;
 const MAX_TEXLIGHTS = 128;
 
-fn makeBackplanes(allocator: std.mem.Allocator, bsp: *const Bsp) ![]Bsp.Plane {
-    const backplanes = try allocator.alloc(Bsp.Plane, bsp.planes.len);
+fn makeBackplanes(state: *State, bsp: *const Bsp) void {
     for (bsp.planes, 0..) |plane, i| {
-        backplanes[i] = .{
+        state.backplanes[i] = .{
             .normal = .{
                 -plane.normal[0],
                 -plane.normal[1],
                 -plane.normal[2],
             },
             .dist = -plane.dist,
-            .type = 0,
+            .type = @enumFromInt(0),
         };
     }
-    return backplanes;
 }
 
 fn makeParents(state: *State, bsp: *const Bsp, nodenum: i32, parent: i32) void {
@@ -68,28 +66,25 @@ fn makeParents(state: *State, bsp: *const Bsp, nodenum: i32, parent: i32) void {
 }
 
 pub const TNode = struct {
-    type: i32 = 0,
+    type: Bsp.PlaneType = @enumFromInt(0),
     normal: [3]f32 = @splat(0),
     dist: f32 = 0,
     children: [2]i32 = @splat(0),
     pad: i32 = 0,
 };
 
-fn makeTNodes(allocator: std.mem.Allocator, bsp: *const Bsp) ![]TNode {
-    const tnodes = try allocator.alloc(TNode, bsp.nodes.len + 1);
-    @memset(tnodes, .{});
+fn makeTNodes(state: *State, bsp: *const Bsp) void {
+    @memset(state.tnodes, .{});
 
     var next: usize = 0;
-    makeTNode(tnodes, bsp, 0, &next);
-
-    return tnodes;
+    makeTNode(state, bsp, 0, &next);
 }
 
-fn makeTNode(tnodes: []TNode, bsp: *const Bsp, nodenum: usize, next: *usize) void {
+fn makeTNode(state: *State, bsp: *const Bsp, nodenum: usize, next: *usize) void {
     const t_index = next.*;
     next.* += 1;
 
-    const t = &tnodes[t_index];
+    const t = &state.tnodes[t_index];
     const node = bsp.nodes[nodenum];
     const plane = bsp.planes[@intCast(node.planenum)];
 
@@ -108,7 +103,7 @@ fn makeTNode(tnodes: []TNode, bsp: *const Bsp, nodenum: usize, next: *usize) voi
 
             t.children[i] = @intCast(next.*);
 
-            makeTNode(tnodes, bsp, child_index, next);
+            makeTNode(state, bsp, child_index, next);
         }
     }
 }
@@ -297,7 +292,7 @@ pub const Patch = struct {
     reflectivity: Vec3 = @splat(0),
     samplelight: Vec3 = @splat(0),
     samples: i32 = 0,
-    faceNumber: i32 = 0,
+    faceNumber: usize = 0,
 };
 
 fn makePatchForFace(
@@ -361,7 +356,7 @@ fn makePatchForFace(
 
     state.face_centroids[face_num] = centroid;
 
-    patch.faceNumber = @intCast(face_num);
+    patch.faceNumber = face_num;
     patch.origin = windingCenter(&winding);
 
     patch.normal = patch.plane.normal;
@@ -412,9 +407,8 @@ fn makePatches(
             }
         }
 
-        for (0..@intCast(model.numfaces)) |j| {
-            const face_num = @as(usize, @intCast(model.firstface)) + j;
-            try state.face_entity.put(allocator, face_num, entity);
+        for (@intCast(model.firstface)..@intCast(model.firstface + model.numfaces)) |face_num| {
+            state.face_entity[face_num] = entity;
             state.face_offset[face_num] = origin;
             const face = &bsp.faces[face_num];
             var winding = try windingFromFace(allocator, bsp, face);
@@ -431,9 +425,7 @@ fn makePatches(
             };
 
             try patches.append(allocator, patch);
-
-            const face_patches = (try state.face_patches.getOrPutValue(allocator, face_num, std.ArrayList(usize).empty)).value_ptr;
-            try face_patches.append(allocator, patches.items.len - 1);
+            try state.face_patches[face_num].append(allocator, patches.items.len - 1);
         }
     }
 
@@ -641,8 +633,7 @@ fn subdividePatch(allocator: std.mem.Allocator, state: *State, patch_index: usiz
     try state.patches.append(allocator, newp);
     const newp_index = state.patches.items.len - 1;
 
-    const face_patches = (try state.face_patches.getOrPutValue(allocator, @intCast(newp.faceNumber), std.ArrayList(usize).empty)).value_ptr;
-    try face_patches.append(allocator, newp_index);
+    try state.face_patches[newp.faceNumber].append(allocator, newp_index);
 
     // re-get patch because appending may invalidate pointer
     patch = &state.patches.items[patch_index];
@@ -1160,15 +1151,6 @@ fn getPhongNormal(state: *State, bsp: *const Bsp, facenum: usize, spot: Vec3) Ve
     return phongnormal;
 }
 
-const PlaneType = enum(i32) {
-    x = 0,
-    y = 1,
-    z = 2,
-    any_x = 3,
-    any_y = 4,
-    any_z = 5,
-};
-
 const Contents = enum(i32) {
     empty = -1,
     solid = -2,
@@ -1194,7 +1176,7 @@ fn testLine(state: *State, node: i32, start: Vec3, stop: Vec3) Contents {
 
     const tnode = &state.tnodes[@intCast(node)];
 
-    const front, const back = switch (@as(PlaneType, @enumFromInt(tnode.type))) {
+    const front, const back = switch (tnode.type) {
         .x => .{ start[0] - tnode.dist, stop[0] - tnode.dist },
         .y => .{ start[1] - tnode.dist, stop[1] - tnode.dist },
         .z => .{ start[2] - tnode.dist, stop[2] - tnode.dist },
@@ -1357,7 +1339,7 @@ fn addSampleToPatch(state: *State, s: *const Sample, facenum: usize) void {
     if (state.numbounce == 0) return;
     if (vectorAvg(s.light) < 1) return;
 
-    const patch_indices = state.face_patches.get(facenum) orelse return;
+    const patch_indices = state.face_patches[facenum];
 
     for (patch_indices.items) |pi| {
         const patch = &state.patches.items[pi];
@@ -1509,15 +1491,13 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
 
     // Average direct light on each patch for radiosity bounces
     if (state.numbounce > 0) {
-        if (state.face_patches.get(face_num)) |list| {
-            for (list.items) |patch_index| {
-                const patch = &state.patches.items[patch_index];
-                if (patch.samples > 0) {
-                    const scale = 1.0 / @as(f32, @floatFromInt(patch.samples));
-                    const v = patch.samplelight * @as(Vec3, @splat(scale));
-                    patch.totallight += v;
-                    patch.directlight += v;
-                }
+        for (state.face_patches[face_num].items) |patch_index| {
+            const patch = &state.patches.items[patch_index];
+            if (patch.samples > 0) {
+                const scale = 1.0 / @as(f32, @floatFromInt(patch.samples));
+                const v = patch.samplelight * @as(Vec3, @splat(scale));
+                patch.totallight += v;
+                patch.directlight += v;
             }
         }
     }
@@ -1528,7 +1508,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
     for (&face.styles, 0..) |style, j| {
         if (style == 255) break;
         if (style == 0) {
-            const first_patch_idx = state.face_patches.get(face_num).?.items[0];
+            const first_patch_idx = state.face_patches[face_num].items[0];
             const baselight = state.patches.items[first_patch_idx].baselight;
             for (0..l.numsurfpt) |i| {
                 state.facelight[face_num].samples[j][i].light += baselight;
@@ -1539,19 +1519,19 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
 }
 
 fn patchPlaneDist(state: *const State, patch: *const Patch) f32 {
-    return patch.plane.dist + dotProduct(state.face_offset[@intCast(patch.faceNumber)], patch.normal);
+    return patch.plane.dist + dotProduct(state.face_offset[patch.faceNumber], patch.normal);
 }
 
 fn testPatchToFace(
     state: *State,
     vismatrix: []u8,
     patchnum: usize,
-    facenum: usize,
+    face_num: usize,
     head: i32,
     bitpos: usize,
 ) void {
     const patch = &state.patches.items[patchnum];
-    const patch2_indices = state.face_patches.get(facenum) orelse return;
+    const patch2_indices = state.face_patches[face_num];
     if (patch2_indices.items.len == 0) return;
 
     const patch2_first = &state.patches.items[patch2_indices.items[0]];
@@ -1562,10 +1542,9 @@ fn testPatchToFace(
 
     for (patch2_indices.items) |pi| {
         const patch2 = &state.patches.items[pi];
-        const m = pi;
 
-        if (m > patchnum and dotProduct(patch2.origin, patch.normal) > patchPlaneDist(state, patch) + 1.01 and testLine(state, head, patch.origin, patch2.origin) == .empty) {
-            const bitset = bitpos + m;
+        if (pi > patchnum and dotProduct(patch2.origin, patch.normal) > patchPlaneDist(state, patch) + 1.01 and testLine(state, head, patch.origin, patch2.origin) == .empty) {
+            const bitset = bitpos + pi;
             vismatrix[bitset >> 3] |= @as(u8, 1) << @intCast(bitset & 7);
         }
     }
@@ -1616,7 +1595,7 @@ fn buildVisLeafs(
 
         for (0..srcleaf.nummarksurfaces) |lface| {
             const facenum = bsp.marksurfaces[srcleaf.firstmarksurface + lface];
-            const patch_indices = state.face_patches.get(facenum) orelse continue;
+            const patch_indices = state.face_patches[facenum];
 
             for (patch_indices.items) |pi| {
                 const patch = &state.patches.items[pi];
@@ -2186,11 +2165,9 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
             .plane = &bsp.planes[@intCast(face.planenum)],
         };
 
-        if (state.face_patches.get(face_num)) |list| {
-            for (list.items) |patch_index| {
-                const patch = &state.patches.items[patch_index];
-                try trian.addPatch(allocator, patch);
-            }
+        for (state.face_patches[face_num].items) |patch_index| {
+            const patch = &state.patches.items[patch_index];
+            try trian.addPatch(allocator, patch);
         }
 
         for (0..face.numedges) |j| {
@@ -2210,18 +2187,16 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
             else
                 es.faces[0].?;
 
-            if (state.face_patches.get(face2-bsp.faces.ptr)) |list| {
-                for (list.items) |patch_index| {
-                    const patch = &state.patches.items[patch_index];
-                    try trian.addPatch(allocator, patch);
-                }
+            for (state.face_patches[face2 - bsp.faces.ptr].items) |patch_index| {
+                const patch = &state.patches.items[patch_index];
+                try trian.addPatch(allocator, patch);
             }
         }
 
         try triangulatePoints(allocator, trian);
     }
 
-    const minlight: f32 = state.face_entity.get(face_num).?.floatForKey("_minlight") * 128;
+    const minlight: f32 = state.face_entity[face_num].floatForKey("_minlight") * 128;
 
     for (0..lightstyles) |k| {
         var last_tri: ?usize = null;
@@ -2272,26 +2247,26 @@ const Sample = struct {
 };
 
 const Facelight = struct {
-    samples: [MAXLIGHTMAPS][]Sample = [_][]Sample{&.{}} ** MAXLIGHTMAPS,
+    samples: [MAXLIGHTMAPS][]Sample = @splat(&.{}),
 };
-
-const FacePatchesMap = std.AutoHashMapUnmanaged(usize, std.ArrayList(usize));
 
 pub const State = struct {
     entities: []Bsp.Entity = &.{},
-    backplanes: []Bsp.Plane = &.{},
-    leafparents: [MAX_MAP_LEAFS]i32 = @splat(0),
-    nodeparents: [MAX_MAP_NODES]i32 = @splat(0),
-    face_entity: std.AutoHashMapUnmanaged(usize, *Bsp.Entity) = .empty,
-    face_offset: [MAX_MAP_FACES]Vec3 = @splat(@as(Vec3, @splat(0))),
-    face_patches: FacePatchesMap = FacePatchesMap.empty,
-    face_centroids: [MAX_MAP_EDGES]Vec3 = @splat(@as(Vec3, @splat(0))),
     texlights: []TexLight = &.{},
-    edgeshare: [MAX_MAP_EDGES]EdgeShare = @splat(.{}),
-    patches: std.ArrayList(Patch) = .empty,
-    facelight: [MAX_MAP_FACES]Facelight = @splat(.{}),
-    directlights: LeafDirectLightMap = .empty,
+
+    backplanes: []Bsp.Plane = &.{},
+    leafparents: []i32 = &.{},
+    nodeparents: []i32 = &.{},
     tnodes: []TNode = &.{},
+    patches: std.ArrayList(Patch) = .empty,
+    face_entity: []*Bsp.Entity = &.{},
+    face_offset: []Vec3 = &.{},
+    face_patches: []std.ArrayList(usize) = &.{},
+    face_centroids: []Vec3 = &.{},
+    edgeshare: []EdgeShare = &.{},
+
+    directlights: LeafDirectLightMap = .empty,
+    facelight: []Facelight = &.{},
 
     numbounce: u32 = 1,
     maxchop: f32 = 64,
@@ -2321,57 +2296,75 @@ pub const State = struct {
         std.debug.print(fmt, args);
     }
 
+    pub fn setupRad(self: *State, allocator: std.mem.Allocator, bsp: *Bsp) !void {
+        self.backplanes = try allocator.alloc(Bsp.Plane, bsp.planes.len);
+        makeBackplanes(self, bsp);
+
+        self.leafparents = try allocator.alloc(i32, bsp.leafs.len);
+        self.nodeparents = try allocator.alloc(i32, bsp.nodes.len);
+        makeParents(self, bsp, 0, -1);
+
+        // c allocates bsp.nodes.len + 1, but that's for a weird alignment hack
+        self.tnodes = try allocator.alloc(TNode, bsp.nodes.len);
+        makeTNodes(self, bsp);
+
+        self.face_entity = try allocator.alloc(*Bsp.Entity, bsp.faces.len);
+        self.face_offset = try allocator.alloc(Vec3, bsp.faces.len);
+        self.face_patches = try allocator.alloc(std.ArrayList(usize), bsp.faces.len);
+        @memset(self.face_patches, .empty);
+        self.face_centroids = try allocator.alloc(Vec3, bsp.faces.len);
+        self.patches = try makePatches(allocator, self, bsp);
+        try subdividePatches(allocator, self);
+
+        self.edgeshare = try allocator.alloc(EdgeShare, bsp.edges.len);
+        @memset(self.edgeshare, .{});
+        pairEdges(self, bsp);
+    }
+
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
-        self.face_entity.deinit(allocator);
-        for (self.texlights) |texlight| {
-            allocator.free(texlight.filename);
+        allocator.free(self.backplanes);
+        allocator.free(self.leafparents);
+        allocator.free(self.nodeparents);
+        allocator.free(self.tnodes);
+
+        allocator.free(self.face_entity);
+        allocator.free(self.face_offset);
+        for (self.face_patches) |*patch_indices| {
+            patch_indices.deinit(allocator);
         }
-        allocator.free(self.texlights);
+        allocator.free(self.face_patches);
+        allocator.free(self.face_centroids);
+        for (self.patches.items) |*patch| patch.winding.deinit(allocator);
+        self.patches.deinit(allocator);
+
+        allocator.free(self.edgeshare);
     }
 };
 
 pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
-    state.entities = try parseEntities(allocator, bsp);
-    defer {
-        for (state.entities) |entity| entity.deinit(allocator);
-        allocator.free(state.entities);
-    }
-
-    state.backplanes = try makeBackplanes(allocator, bsp);
-    defer allocator.free(state.backplanes);
-
-    makeParents(state, bsp, 0, -1);
-
-    state.tnodes = try makeTNodes(allocator, bsp);
-    defer allocator.free(state.tnodes);
-
-    state.patches = try makePatches(allocator, state, bsp);
-    defer {
-        for (state.patches.items) |*patch| patch.winding.deinit(allocator);
-        state.patches.deinit(allocator);
-
-        var it = state.face_patches.valueIterator();
-        while (it.next()) |face_patches| {
-            face_patches.deinit(allocator);
-        }
-        state.face_patches.deinit(allocator);
-    }
-
-    pairEdges(state, bsp);
-
-    try subdividePatches(allocator, state);
-
     state.directlights = try createDirectLights(allocator, state, bsp);
+    errdefer {
+        var it = state.directlights.valueIterator();
+        while (it.next()) |lights| {
+            lights.deinit(allocator);
+        }
+        state.directlights.deinit(allocator);
+    }
 
+    state.facelight = try allocator.alloc(Facelight, bsp.faces.len);
+    @memset(state.facelight, .{});
+    defer {
+        for (0..bsp.faces.len) |i| {
+            for (&state.facelight[i].samples) |*samples| {
+                if (samples.len > 0) allocator.free(samples.*);
+                samples.* = &.{};
+            }
+        }
+        allocator.free(state.facelight);
+    }
     for (0..bsp.faces.len) |i| {
         try buildFacelights(allocator, state, bsp, i);
     }
-    defer for (0..bsp.faces.len) |i| {
-        for (&state.facelight[i].samples) |*samples| {
-            if (samples.len > 0) allocator.free(samples.*);
-            samples.* = &.{};
-        }
-    };
 
     // DeleteDirectLights
     {

@@ -1,14 +1,14 @@
 const std = @import("std");
 
-const b = @import("build");
+const __DATE__ = @import("build").__DATE__;
 const c = @import("c");
-
-const Bsp = @import("bspfile.zig");
-const cmdlib = @import("cmdlib.zig");
+const hlsdk_utils = @import("hlsdk_utils");
+const Bsp = hlsdk_utils.Bsp;
+const cmdlib = hlsdk_utils.cmdlib;
 const qError = cmdlib.qError;
 const handleQError = cmdlib.handleQError;
 const MAX_PATH = cmdlib.MAX_PATH;
-const qrad = @import("qrad.zig");
+const qrad = hlsdk_utils.qrad;
 const State = qrad.State;
 const readLightFile = qrad.readLightFile;
 const radWorld = qrad.radWorld;
@@ -21,15 +21,12 @@ pub fn main(init: std.process.Init) !u8 {
     defer allocator.free(args);
 
     const state = try allocator.create(State);
+    defer allocator.destroy(state);
     state.* = .{};
-    defer {
-        state.deinit(allocator);
-        allocator.destroy(state);
-    }
 
     var designer_lights: []const u8 = "";
 
-    std.debug.print("qrad.exe v 1.5 ({s})\n", .{b.__DATE__});
+    std.debug.print("qrad.exe v 1.5 ({s})\n", .{__DATE__});
     std.debug.print("----- Radiosity ----\n", .{});
 
     state.verbose = true;
@@ -229,6 +226,12 @@ pub fn main(init: std.process.Init) !u8 {
     defer allocator.free(level_lights);
 
     readLightFile(allocator, io, state, global_lights) catch |e| return handleQError(e);
+    defer {
+        for (state.texlights) |texlight| {
+            allocator.free(texlight.filename);
+        }
+        allocator.free(state.texlights);
+    }
     if (designer_lights.len != 0) readLightFile(allocator, io, state, designer_lights) catch |e| return handleQError(e);
     if (level_lights.len != 0) readLightFile(allocator, io, state, level_lights) catch |e| return handleQError(e);
 
@@ -238,11 +241,20 @@ pub fn main(init: std.process.Init) !u8 {
     var bsp = Bsp.init(allocator, io, source) catch |e| return handleQError(e);
     defer bsp.deinit(allocator);
 
+    state.entities = try bsp.parseEntities(allocator);
+    defer {
+        for (state.entities) |entity| entity.deinit(allocator);
+        allocator.free(state.entities);
+    }
+
     if (bsp.visdata.len == 0) {
         std.debug.print("No vis information, direct lighting only.\n", .{});
         state.numbounce = 0;
         state.ambient = @splat(0.1);
     }
+
+    try state.setupRad(allocator, &bsp);
+    defer state.deinit(allocator);
 
     radWorld(allocator, state, &bsp) catch |e| return handleQError(e);
     defer allocator.free(bsp.lightdata); // free new lightdata
