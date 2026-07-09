@@ -17,6 +17,21 @@ pub fn main(init: std.process.Init) !u8 {
     const allocator = init.gpa;
     const io = init.io;
 
+    // var mxcsr: u32 = 0;
+    // asm volatile ("stmxcsr (%[ptr])"
+    //     :
+    //     : [ptr] "r" (&mxcsr),
+    //     : .{ .memory = true }
+    // );
+    //
+    // mxcsr |= (1 << 15) | (1 << 6); // FTZ | DAZ
+    //
+    // asm volatile ("ldmxcsr (%[ptr])"
+    //     :
+    //     : [ptr] "r" (&mxcsr),
+    //     : .{ .memory = true }
+    // );
+
     const args = try init.minimal.args.toSlice(allocator);
     defer allocator.free(args);
 

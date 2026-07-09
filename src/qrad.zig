@@ -7,6 +7,9 @@ const MAXLIGHTMAPS = Bsp.MAXLIGHTMAPS;
 const parseEntities = Bsp.parseEntities;
 const mathlib = @import("mathlib.zig");
 const dotProduct = mathlib.dotProduct;
+const vectorAdd = mathlib.vectorAdd;
+const vectorSubtract = mathlib.vectorSubtract;
+const vectorScale = mathlib.vectorScale;
 const vectorNormalize = mathlib.vectorNormalize;
 const vectorLength = mathlib.vectorLength;
 const ON_EPSILON = mathlib.ON_EPSILON;
@@ -122,7 +125,7 @@ fn entityForModel(entities: []Bsp.Entity, modnum: usize) *Bsp.Entity {
     return &entities[0];
 }
 
-const Winding = std.ArrayList(Vec3);
+const Winding = std.ArrayList([3]f32);
 
 fn removeColinearPoints(allocator: std.mem.Allocator, winding: *Winding) !void {
     const old_len = winding.items.len;
@@ -138,8 +141,8 @@ fn removeColinearPoints(allocator: std.mem.Allocator, winding: *Winding) !void {
         const j = (i + 1) % old_len;
         const k = (i + old_len - 1) % old_len;
 
-        var v1 = winding.items[j] - winding.items[i];
-        var v2 = winding.items[i] - winding.items[k];
+        var v1 = vectorSubtract(winding.items[j], winding.items[i]);
+        var v2 = vectorSubtract(winding.items[i], winding.items[k]);
 
         v1 = vectorNormalize(v1);
         v2 = vectorNormalize(v2);
@@ -191,14 +194,6 @@ fn isSky(bsp: *const Bsp, face: Bsp.Face) bool {
     return std.ascii.startsWithIgnoreCase(&miptex.name, "sky");
 }
 
-fn crossProductSlice(a: *const [3]f32, b: *const [3]f32) Vec3 {
-    return .{
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
-}
-
 fn windingArea(winding: *const Winding) f32 {
     if (winding.items.len < 3) return 0;
 
@@ -207,8 +202,8 @@ fn windingArea(winding: *const Winding) f32 {
     var total: f32 = 0;
 
     for (winding.items[2..], 2..) |p, i| {
-        const d1 = winding.items[i - 1] - origin;
-        const d2 = p - origin;
+        const d1 = vectorSubtract(winding.items[i - 1], origin);
+        const d2 = vectorSubtract(p, origin);
 
         const cross = crossProduct(d1, d2);
 
@@ -219,23 +214,25 @@ fn windingArea(winding: *const Winding) f32 {
 }
 
 fn windingCenter(winding: *const Winding) Vec3 {
-    var center: Vec3 = .{ 0, 0, 0 };
+    var center: [3]f32 = .{ 0, 0, 0 };
     for (winding.items) |point| {
-        center += point;
+        center = vectorAdd(center, point);
     }
 
-    center *= @splat(1.0 / @as(f32, @floatFromInt(winding.items.len)));
+    center = vectorScale(center, 1.0 / @as(f32, @floatFromInt(winding.items.len)));
 
     return center;
 }
 
 fn windingBounds(winding: *const Winding) struct { Vec3, Vec3 } {
-    var mins: Vec3 = @splat(99999);
-    var maxs: Vec3 = @splat(-99999);
+    var mins: [3]f32 = @splat(99999);
+    var maxs: [3]f32 = @splat(-99999);
 
     for (winding.items) |point| {
-        mins = @min(mins, point);
-        maxs = @max(maxs, point);
+        for (0..3) |i| {
+            mins[i] = @min(mins[i], point[i]);
+            maxs[i] = @max(maxs[i], point[i]);
+        }
     }
 
     return .{ mins, maxs };
@@ -279,18 +276,18 @@ pub const Patch = struct {
     face_mins: Vec3 = @splat(0),
     face_maxs: Vec3 = @splat(0),
     transfers: []Transfer = &.{},
-    origin: Vec3 = @splat(0),
-    normal: Vec3 = @splat(0),
+    origin: [3]f32 = @splat(0),
+    normal: [3]f32 = @splat(0),
     plane: *align(1) const Bsp.Plane = undefined,
     chop: f32 = 0,
     scale: [2]f32 = @splat(0),
     sky: bool = false,
-    totallight: Vec3 = @splat(0),
+    totallight: [3]f32 = @splat(0),
     baselight: Vec3 = @splat(0),
     directlight: Vec3 = @splat(0),
     area: f32 = 0,
     reflectivity: Vec3 = @splat(0),
-    samplelight: Vec3 = @splat(0),
+    samplelight: [3]f32 = @splat(0),
     samples: i32 = 0,
     faceNumber: usize = 0,
 };
@@ -360,7 +357,7 @@ fn makePatchForFace(
     patch.origin = windingCenter(&winding);
 
     patch.normal = patch.plane.normal;
-    patch.origin += patch.normal;
+    patch.origin = vectorAdd(patch.origin, patch.normal);
 
     patch.face_mins, patch.face_maxs = windingBounds(&winding);
 
@@ -413,7 +410,7 @@ fn makePatches(
             const face = &bsp.faces[face_num];
             var winding = try windingFromFace(allocator, bsp, face);
             for (winding.items) |*point| {
-                point.* += origin;
+                point.* = vectorAdd(point.*, origin);
             }
 
             if (patches.items.len >= MAX_PATCHES)
@@ -624,8 +621,8 @@ fn subdividePatch(allocator: std.mem.Allocator, state: *State, patch_index: usiz
     patch.origin = windingCenter(&patch.winding);
     newp.origin = windingCenter(&newp.winding);
 
-    patch.origin += patch.normal;
-    newp.origin += newp.normal;
+    patch.origin = vectorAdd(patch.origin, patch.normal);
+    newp.origin = vectorAdd(newp.origin, newp.normal);
 
     patch.mins, patch.maxs = windingBounds(&patch.winding);
     newp.mins, newp.maxs = windingBounds(&newp.winding);
@@ -909,7 +906,7 @@ fn calcFaceVectors(bsp: *const Bsp, l: *LightInfo) !void {
         }
     }
 
-    var texnormal = vectorNormalize(crossProductSlice(texinfo.vecs[1][0..3], texinfo.vecs[0][0..3]));
+    var texnormal = vectorNormalize(crossProduct(texinfo.vecs[1][0..3].*, texinfo.vecs[0][0..3].*));
 
     var distscale = dotProduct(texnormal, l.facenormal);
     if (distscale == 0)
@@ -1169,7 +1166,7 @@ const Contents = enum(i32) {
     translucent = -15,
 };
 
-fn testLine(state: *State, node: i32, start: Vec3, stop: Vec3) Contents {
+fn testLine(state: *State, node: i32, start: [3]f32, stop: [3]f32) Contents {
     if (node == @intFromEnum(Contents.solid)) return .solid;
     if (node == @intFromEnum(Contents.sky)) return .sky;
     if (node < 0) return .empty;
@@ -1195,7 +1192,12 @@ fn testLine(state: *State, node: i32, start: Vec3, stop: Vec3) Contents {
     const side: usize = if (front < 0) 1 else 0;
 
     const frac = front / (front - back);
-    const mid = start + (stop - start) * @as(Vec3, @splat(frac));
+
+    const mid: [3]f32 = .{
+        start[0] + (stop[0] - start[0]) * frac,
+        start[1] + (stop[1] - start[1]) * frac,
+        start[2] + (stop[2] - start[2]) * frac,
+    };
 
     const r = testLine(state, tnode.children[side], start, mid);
     if (r != .empty) return r;
@@ -1356,7 +1358,7 @@ fn addSampleToPatch(state: *State, s: *const Sample, facenum: usize) void {
         if (!in_bounds) continue;
 
         patch.samples += 1;
-        patch.samplelight += s.light;
+        patch.samplelight = vectorAdd(patch.samplelight, s.light);
     }
 }
 
@@ -1496,7 +1498,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
             if (patch.samples > 0) {
                 const scale = 1.0 / @as(f32, @floatFromInt(patch.samples));
                 const v = patch.samplelight * @as(Vec3, @splat(scale));
-                patch.totallight += v;
+                patch.totallight = vectorAdd(patch.totallight, v);
                 patch.directlight += v;
             }
         }
@@ -1662,7 +1664,7 @@ fn makeScales(allocator: std.mem.Allocator, state: *State, vismatrix: []const u8
         for (state.patches.items, 0..) |*patch2, j| {
             if (!checkVisBit(vismatrix, num_patches, i, j)) continue;
 
-            var delta = patch2.origin - origin;
+            var delta = vectorSubtract(patch2.origin, origin);
             const dist = vectorLength(delta);
             delta = vectorNormalize(delta);
 
@@ -1779,7 +1781,7 @@ fn collectLight(state: *State, emitlight: []Vec3, addlight: []Vec3) Vec3 {
             continue;
         }
 
-        patch.totallight += addlight[i];
+        patch.totallight = vectorAdd(patch.totallight, addlight[i]);
         emitlight[i] = addlight[i] * @as(Vec3, @splat(TRANSFER_SCALE));
         total += emitlight[i];
         addlight[i] = @splat(0);
@@ -1856,7 +1858,7 @@ fn precompLightmapOffsets(state: *State, bsp: *const Bsp) usize {
 const TriEdge = struct {
     p0: usize,
     p1: usize,
-    normal: Vec3,
+    normal: [3]f32,
     dist: f32,
     tri: ?usize,
 };
@@ -1908,7 +1910,7 @@ fn findEdge(allocator: std.mem.Allocator, trian: *Triangulation, points: EdgePoi
     if (trian.edges.items.len > MAX_TRI_EDGES - 2)
         return qError("trian->numedges > MAX_TRI_EDGES-2", .{}, error.MaxTriEdges);
 
-    const v1 = vectorNormalize(trian.points.items[points.p0].origin - trian.points.items[points.p1].origin);
+    const v1 = vectorNormalize(vectorSubtract(trian.points.items[points.p0].origin, trian.points.items[points.p1].origin));
     const normal = crossProduct(v1, trian.plane.normal);
     const dist = dotProduct(trian.points.items[points.p0].origin, normal);
 
@@ -1951,8 +1953,8 @@ fn triEdgeR(allocator: std.mem.Allocator, trian: *Triangulation, edge_index: usi
 
         if (dotProduct(point, edge.normal) - edge.dist < 0)
             continue;
-        var v1 = p0 - point;
-        var v2 = p1 - point;
+        var v1 = vectorSubtract(p0, point);
+        var v2 = vectorSubtract(p1, point);
         if (vectorLength(v1) == 0)
             continue;
         if (vectorLength(v2) == 0)
@@ -2007,7 +2009,7 @@ fn triangulatePoints(allocator: std.mem.Allocator, trian: *Triangulation) !void 
         for (i + 1..trian.points.items.len) |j| {
             const p2 = trian.points.items[j].origin;
 
-            const v1 = p2 - p1;
+            const v1 = vectorSubtract(p2, p1);
             const distance = vectorLength(v1);
 
             if (distance < best_distance) {
@@ -2052,8 +2054,8 @@ fn lerpTriangle(trian: *Triangulation, tri_index: usize, point: Vec3) Vec3 {
 
     const base = p1.totallight;
 
-    const d1 = p2.totallight - base;
-    const d2 = p3.totallight - base;
+    const d1 = vectorSubtract(p2.totallight, base);
+    const d2 = vectorSubtract(p3.totallight, base);
 
     const x = dotProduct(point, e1.normal) - e1.dist;
     const y = dotProduct(point, e3.normal) - e3.dist;
@@ -2064,11 +2066,11 @@ fn lerpTriangle(trian: *Triangulation, tri_index: usize, point: Vec3) Vec3 {
     var result = base;
 
     if (@abs(x2) >= ON_EPSILON) {
-        result += d2 * @as(Vec3, @splat(x / x2));
+        result = vectorAdd(result, d2 * @as(Vec3, @splat(x / x2)));
     }
 
     if (@abs(y1) >= ON_EPSILON) {
-        result += d1 * @as(Vec3, @splat(y / y1));
+        result = vectorAdd(result, d1 * @as(Vec3, @splat(y / y1)));
     }
 
     return result;
@@ -2111,14 +2113,14 @@ fn sampleTriangulation(point: Vec3, trian: *Triangulation, last_tri_index: *?usi
         const p0 = trian.points.items[edge.p0];
         const p1 = trian.points.items[edge.p1];
 
-        const v1 = vectorNormalize(p1.origin - p0.origin);
+        const v1 = vectorNormalize(vectorSubtract(p1.origin, p0.origin));
         const v2 = point - p0.origin;
 
         const proj = dotProduct(v2, v1);
         if (proj < 0 or proj > 1)
             continue;
 
-        return p0.totallight + @as(Vec3, @splat(proj)) * (p1.totallight - p0.totallight);
+        return p0.totallight + @as(Vec3, @splat(proj)) * vectorSubtract(p1.totallight, p0.totallight);
     }
 
     var best: f32 = 99999;
@@ -2216,7 +2218,8 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
             }
 
             if (state.gamma != 1.0) {
-                lb = @exp(@as(Vec3, @splat(state.gamma)) * @log(lb * @as(Vec3, @splat(1.0 / 256.0)))) * @as(Vec3, @splat(256.0));
+                inline for (0..3) |i|
+                    lb[i] = std.math.pow(f32, lb[i] / 256, state.gamma) * 256;
             }
 
             const base = @as(usize, @intCast(face.lightofs)) + k * facelight.samples[0].len * 3 + j * 3;
@@ -2393,7 +2396,7 @@ pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
 
         for (state.patches.items) |*patch| {
             if (!vectorCompare(patch.directlight, vec3_origin)) {
-                patch.totallight -= patch.directlight;
+                patch.totallight = vectorSubtract(patch.totallight, patch.directlight);
             }
         }
     }

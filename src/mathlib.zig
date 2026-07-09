@@ -1,5 +1,29 @@
 pub const Vec3 = @Vector(3, f32);
 
+pub fn vectorAdd(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{
+        a[0] + b[0],
+        a[1] + b[1],
+        a[2] + b[2],
+    };
+}
+
+pub fn vectorSubtract(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{
+        a[0] - b[0],
+        a[1] - b[1],
+        a[2] - b[2],
+    };
+}
+
+pub fn vectorScale(a: [3]f32, scale: f32) [3]f32 {
+    return .{
+        a[0] * scale,
+        a[1] * scale,
+        a[2] * scale,
+    };
+}
+
 pub fn dotProduct(a: Vec3, b: Vec3) f32 {
     return @reduce(.Add, a * b);
 }
