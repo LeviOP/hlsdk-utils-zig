@@ -1628,7 +1628,7 @@ fn buildVisMatrix(
     const num_patches = state.patches.items.len;
     const count = ((num_patches + 1) * (((num_patches + 1) + 15) / 16));
 
-    state.print("visibility matrix: {d:.1} megs\n", .{@as(f32, @floatFromInt(count)) / (1024 * 1024.0)});
+    state.print("visibility matrix: {d:5.1} megs\n", .{@as(f32, @floatFromInt(count)) / (1024 * 1024.0)});
 
     const vismatrix = try allocator.alloc(u8, count);
     @memset(vismatrix, 0);
@@ -1725,7 +1725,7 @@ fn makeAllScales(
 
     const total_transfer = try makeScales(allocator, state, vismatrix);
 
-    state.print("transfer lists: {d:.1} megs\n", .{
+    state.print("transfer lists: {d:5.1} megs\n", .{
         @as(f32, @floatFromInt(total_transfer * @sizeOf(Transfer))) / (1024 * 1024.0),
     });
 }
