@@ -1501,7 +1501,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
     if (state.numbounce > 0) {
         for (state.face_patches[face_num].items) |patch_index| {
             const patch = &state.patches.items[patch_index];
-            if (patch.samples > 0) {
+            if (patch.samples != 0) {
                 const scale = 1.0 / @as(f32, @floatFromInt(patch.samples));
                 const v = vectorScale(patch.samplelight, scale);
                 patch.totallight = vectorAdd(patch.totallight, v);
@@ -1510,7 +1510,19 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
         }
     }
 
-    // TODO: ambient
+    // add an ambient term if desired
+    if (state.ambient[0] != 0 or state.ambient[1] != 0 or state.ambient[2] != 0) {
+        for (&face.styles, 0..) |style, j| {
+            if (style == 255) break;
+            if (style == 0) {
+                const samples = state.facelight[face_num].samples[j];
+                for (0..l.numsurfpt) |i| {
+                    samples[i].light = vectorAdd(samples[j].light, state.ambient);
+                }
+                break;
+            }
+        }
+    }
 
     // Add baselight (emissive texture self-illumination)
     for (&face.styles, 0..) |style, j| {
@@ -1518,9 +1530,9 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
         if (style == 0) {
             const first_patch_idx = state.face_patches[face_num].items[0];
             const baselight = state.patches.items[first_patch_idx].baselight;
-            const s = state.facelight[face_num].samples[j];
+            const samples = state.facelight[face_num].samples[j];
             for (0..l.numsurfpt) |i| {
-                s[i].light = vectorAdd(s[i].light, baselight);
+                samples[i].light = vectorAdd(samples[i].light, baselight);
             }
             break;
         }
