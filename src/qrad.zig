@@ -10,10 +10,10 @@ const dotProduct = mathlib.dotProduct;
 const vectorAdd = mathlib.vectorAdd;
 const vectorSubtract = mathlib.vectorSubtract;
 const vectorScale = mathlib.vectorScale;
+const vectorMA = mathlib.vectorMA;
 const vectorNormalize = mathlib.vectorNormalize;
 const vectorLength = mathlib.vectorLength;
 const ON_EPSILON = mathlib.ON_EPSILON;
-const EQUAL_EPSILON = mathlib.EQUAL_EPSILON;
 const vectorCompare = mathlib.vectorCompare;
 const vectorAvg = mathlib.vectorAvg;
 const crossProduct = mathlib.crossProduct;
@@ -339,17 +339,17 @@ fn makePatchForFace(
         if (surfedge > 0) {
             const edge = bsp.edges[@intCast(surfedge)];
 
-            centroid += bsp.vertexes[edge.v[0]].point;
-            centroid += bsp.vertexes[edge.v[1]].point;
+            centroid = vectorAdd(centroid, bsp.vertexes[edge.v[0]].point);
+            centroid = vectorAdd(centroid, bsp.vertexes[edge.v[1]].point);
         } else {
             const edge = bsp.edges[@intCast(-surfedge)];
 
-            centroid += bsp.vertexes[edge.v[0]].point;
-            centroid += bsp.vertexes[edge.v[1]].point;
+            centroid = vectorAdd(centroid, bsp.vertexes[edge.v[0]].point);
+            centroid = vectorAdd(centroid, bsp.vertexes[edge.v[1]].point);
         }
     }
 
-    centroid *= @splat(1.0 / (@as(f32, @floatFromInt(face.numedges)) * 2.0));
+    centroid = vectorScale(centroid, 1.0 / (@as(f32, @floatFromInt(face.numedges)) * 2.0));
 
     state.face_centroids[face_num] = centroid;
 
@@ -460,11 +460,11 @@ fn pairEdges(state: *State, bsp: *const Bsp) void {
                     for (0..2) |n| {
                         normals[n] = bsp.planes[@intCast(e.faces[n].?.planenum)].normal;
                         if (e.faces[n].?.side != 0)
-                            normals[n] = -normals[n];
+                            normals[n] = vectorSubtract(vec3_origin, normals[n]);
                     }
                     const cos_normals_angle = dotProduct(normals[0], normals[1]);
                     if (cos_normals_angle >= state.smoothing_threshold) {
-                        e.interface_normal = vectorNormalize(normals[0] + normals[1]);
+                        e.interface_normal = vectorNormalize(vectorAdd(normals[0], normals[1]));
                     }
                 }
             }
@@ -555,7 +555,7 @@ fn clipWinding(
 fn subdividePatch(allocator: std.mem.Allocator, state: *State, patch_index: usize) !void {
     var patch = &state.patches.items[patch_index];
 
-    const total = patch.maxs - patch.mins;
+    const total = vectorSubtract(patch.maxs, patch.mins);
 
     var widest: f32 = -1;
     var widest_axis: usize = 0;
@@ -636,7 +636,7 @@ fn subdividePatch(allocator: std.mem.Allocator, state: *State, patch_index: usiz
     patch = &state.patches.items[patch_index];
 
     // Edge hack for patch
-    const patch_total = patch.maxs - patch.mins;
+    const patch_total = vectorSubtract(patch.maxs, patch.mins);
     if (patch_total[0] < patch.chop and patch_total[1] < patch.chop and
         patch_total[2] < patch.chop)
     {
@@ -653,7 +653,7 @@ fn subdividePatch(allocator: std.mem.Allocator, state: *State, patch_index: usiz
 
     // Edge hack for newp
     const np2 = &state.patches.items[newp_index];
-    const np_total = np2.maxs - np2.mins;
+    const np_total = vectorSubtract(np2.maxs, np2.mins);
     if (np_total[0] < np2.chop and np_total[1] < np2.chop and np_total[2] < np2.chop) {
         inline for (0..3) |i| {
             if ((np2.face_maxs[i] == np2.maxs[i] or np2.face_mins[i] == np2.mins[i]) and
@@ -727,7 +727,7 @@ fn createDirectLights(
                 .style = 0,
                 .origin = p.origin,
                 .normal = p.normal,
-                .intensity = p.totallight * @as(Vec3, @splat(p.area * DIRECT_SCALE)),
+                .intensity = vectorScale(p.totallight, p.area * DIRECT_SCALE),
                 .stopdot = 0,
                 .stopdot2 = 0,
             });
@@ -810,7 +810,7 @@ fn createDirectLights(
                 // point towards target
                 if (findTargetEntity(state.entities, target)) |e2| {
                     const dest = e2.vectorForKey("origin");
-                    dl.normal = vectorNormalize(dest - dl.origin);
+                    dl.normal = vectorNormalize(vectorSubtract(dest, dl.origin));
                 } else {
                     std.debug.print("WARNING: light at ({d} {d} {d}) has missing target\n", .{
                         @as(i32, @trunc(origin[0])),
@@ -856,7 +856,7 @@ fn createDirectLights(
         if (dl.type != .skylight) {
             const l1 = @max(dl.intensity[0], dl.intensity[1], dl.intensity[2]);
             const l1sq = l1 * l1 / 10.0;
-            dl.intensity *= @splat(l1sq);
+            dl.intensity = vectorScale(dl.intensity, l1sq);
         }
     }
 
@@ -914,7 +914,7 @@ fn calcFaceVectors(bsp: *const Bsp, l: *LightInfo) !void {
 
     if (distscale < 0) {
         distscale = -distscale;
-        texnormal = -texnormal;
+        texnormal = vectorSubtract(vec3_origin, texnormal);
     }
 
     distscale = 1 / distscale;
@@ -923,16 +923,18 @@ fn calcFaceVectors(bsp: *const Bsp, l: *LightInfo) !void {
         const len = vectorLength(l.worldtotex[i]);
         var dist = dotProduct(l.worldtotex[i], l.facenormal);
         dist *= distscale;
-        l.textoworld[i] = (l.worldtotex[i] - texnormal * @as(Vec3, @splat(dist))) * @as(Vec3, @splat((1.0 / len) * (1.0 / len)));
+        l.textoworld[i] = vectorScale(vectorMA(l.worldtotex[i], -dist, texnormal), (1.0 / len) * (1.0 / len));
     }
 
-    l.texorg =
-        -l.textoworld[0] * @as(Vec3, @splat(texinfo.vecs[0][3])) -
-        l.textoworld[1] * @as(Vec3, @splat(texinfo.vecs[1][3]));
+    for (0..3) |i| {
+        l.texorg[i] =
+            -texinfo.vecs[0][3] * l.textoworld[0][i] -
+            texinfo.vecs[1][3] * l.textoworld[1][i];
+    }
 
     var dist = dotProduct(l.texorg, l.facenormal) - l.facedist - 1.0;
     dist *= distscale;
-    l.texorg += texnormal * @as(Vec3, @splat(-dist));
+    l.texorg = vectorMA(l.texorg, -dist, texnormal);
 }
 
 fn calcFaceExtents(bsp: *const Bsp, l: *LightInfo) !void {
@@ -1006,11 +1008,13 @@ fn calcPoints(state: *State, bsp: *const Bsp, l: *LightInfo) void {
             for (0..64) |i| {
                 const idx = t * w + s;
 
-                l.surfpt[idx] =
-                    l.texorg +
-                    l.textoworld[0] * @as(Vec3, @splat(us)) +
-                    l.textoworld[1] * @as(Vec3, @splat(ut)) +
-                    origin;
+                for (0..3) |j| {
+                    l.surfpt[idx][j] =
+                        l.texorg[j] +
+                        l.textoworld[0][j] * us +
+                        l.textoworld[1][j] * ut +
+                        origin[j];
+                }
 
                 const luxelleaf = pointInLeaf(bsp, l.surfpt[idx]);
 
@@ -1111,9 +1115,9 @@ fn getPhongNormal(state: *State, bsp: *const Bsp, facenum: usize, spot: Vec3) Ve
                 bsp.vertexes[@intCast(bsp.edges[@intCast(-e)].v[0])].point;
 
             const centroid = state.face_centroids[facenum];
-            const v1 = p1 - centroid;
-            const v2 = p2 - centroid;
-            const vspot = spot - centroid;
+            const v1 = vectorSubtract(p1, centroid);
+            const v2 = vectorSubtract(p2, centroid);
+            const vspot = vectorSubtract(spot, centroid);
 
             const aa = dotProduct(v1, v1);
             const bb = dotProduct(v2, v2);
@@ -1125,20 +1129,19 @@ fn getPhongNormal(state: *State, bsp: *const Bsp, facenum: usize, spot: Vec3) Ve
             const a2 = (dotProduct(vspot, v2) - a1 * ab) / bb;
 
             if (a1 >= 0.0 and a2 >= 0.0) {
-                var n1 = es.interface_normal + es1.interface_normal;
+                var n1 = vectorAdd(es.interface_normal, es1.interface_normal);
                 if (vectorCompare(n1, vec3_origin))
                     n1 = facenormal;
                 n1 = vectorNormalize(n1);
 
-                var n2 = es.interface_normal + es2.interface_normal;
+                var n2 = vectorAdd(es.interface_normal, es2.interface_normal);
                 if (vectorCompare(n2, vec3_origin))
                     n2 = facenormal;
                 n2 = vectorNormalize(n2);
 
-                phongnormal =
-                    facenormal * @as(Vec3, @splat(1.0 - a1 - a2)) +
-                    n1 * @as(Vec3, @splat(a1)) +
-                    n2 * @as(Vec3, @splat(a2));
+                phongnormal = vectorScale(facenormal, 1.0 - a1 - a2);
+                phongnormal = vectorAdd(phongnormal, vectorScale(n1, a1));
+                phongnormal = vectorAdd(phongnormal, vectorScale(n2, a2));
                 phongnormal = vectorNormalize(phongnormal);
                 break;
             }
@@ -1205,7 +1208,7 @@ fn testLine(state: *State, node: i32, start: [3]f32, stop: [3]f32) Contents {
 }
 
 fn vectorMaximum(v: Vec3) f32 {
-    return @reduce(.Max, v);
+    return @max(v[0], @max(v[1], v[2]));
 }
 
 pub const NUMVERTEXNORMALS = 162;
@@ -1237,12 +1240,12 @@ fn gatherSampleLight(
                 const dot = -dotProduct(normal, l.normal);
                 if (dot <= ON_EPSILON / 10.0) continue;
 
-                const delta = pos + l.normal * @as(Vec3, @splat(-10000));
+                const delta = vectorAdd(pos, vectorScale(l.normal, -10000));
                 if (testLine(state, 0, pos, delta) != .sky) continue;
 
-                add = l.intensity * @as(Vec3, @splat(dot));
+                add = vectorScale(l.intensity, dot);
             } else {
-                var delta = l.origin - pos;
+                var delta = vectorSubtract(l.origin, pos);
                 const dist = @max(vectorLength(delta), 1.0);
                 delta = vectorNormalize(delta);
 
@@ -1252,13 +1255,13 @@ fn gatherSampleLight(
                 switch (l.type) {
                     .point => {
                         const ratio = dot / (dist * dist);
-                        add = l.intensity * @as(Vec3, @splat(ratio));
+                        add = vectorScale(l.intensity, ratio);
                     },
                     .surface => {
                         const dot2 = -dotProduct(delta, l.normal);
                         if (dot2 <= ON_EPSILON / 10.0) continue;
                         const ratio = dot * dot2 / (dist * dist);
-                        add = l.intensity * @as(Vec3, @splat(ratio));
+                        add = vectorScale(l.intensity, ratio);
                     },
                     .spotlight => {
                         const dot2 = -dotProduct(delta, l.normal);
@@ -1266,7 +1269,7 @@ fn gatherSampleLight(
                         var ratio = dot * dot2 / (dist * dist);
                         if (dot2 <= l.stopdot)
                             ratio *= (dot2 - l.stopdot2) / (l.stopdot - l.stopdot2);
-                        add = l.intensity * @as(Vec3, @splat(ratio));
+                        add = vectorScale(l.intensity, ratio);
                     },
                     .skylight => unreachable,
                 }
@@ -1295,24 +1298,24 @@ fn gatherSampleLight(
             if (styles[style_index] == 255)
                 styles[style_index] = @intCast(l.style);
 
-            sample[style_index] += add;
+            sample[style_index] = vectorAdd(sample[style_index], add);
         }
     }
 
     // indirect sunlight
     if (maybe_sky_used != null and state.indirect_sun != 0.0) {
         const sky_used = maybe_sky_used.?;
-        const sky_intensity = sky_used.intensity * @as(Vec3, @splat(state.indirect_sun / @as(f32, NUMVERTEXNORMALS * 2)));
+        const sky_intensity = vectorScale(sky_used.intensity, state.indirect_sun / @as(f32, NUMVERTEXNORMALS * 2));
         var total: Vec3 = @splat(0);
 
         for (r_avertexnormals) |anorm| {
             const dot = -dotProduct(normal, anorm);
             if (dot <= ON_EPSILON / 10.0) continue;
 
-            const delta = pos + anorm * @as(Vec3, @splat(-10000));
+            const delta = vectorAdd(pos, vectorScale(anorm, -10000));
             if (testLine(state, 0, pos, delta) != .sky) continue;
 
-            total += sky_intensity * @as(Vec3, @splat(dot));
+            total = vectorAdd(total, vectorScale(sky_intensity, dot));
         }
 
         if (vectorMaximum(total) > 0) {
@@ -1332,7 +1335,7 @@ fn gatherSampleLight(
             if (styles[style_index] == 255)
                 styles[style_index] = @intCast(sky_used.style);
 
-            sample[style_index] += total;
+            sample[style_index] = vectorAdd(sample[style_index], total);
         }
     }
 }
@@ -1383,7 +1386,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
     l.facenormal = plane.normal;
     l.facedist = plane.dist;
     if (face.side != 0) {
-        l.facenormal = -l.facenormal;
+        l.facenormal = vectorSubtract(vec3_origin, l.facenormal);
         l.facedist = -l.facedist;
     }
 
@@ -1455,17 +1458,17 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
 
                         // Calculate the point one third of the way toward the "subsample point"
                         var pos = l.surfpt[i];
-                        pos += l.surfpt[i];
-                        pos += l.surfpt[@intCast(subsample)];
-                        pos *= @splat(1.0 / 3.0);
+                        pos = vectorAdd(pos, l.surfpt[i]);
+                        pos = vectorAdd(pos, l.surfpt[@intCast(subsample)]);
+                        pos = vectorScale(pos, 1.0 / 3.0);
 
                         const pointnormal = getPhongNormal(state, bsp, face_num, pos);
                         gatherSampleLight(state, bsp, pos, &pvs, pointnormal, &subsampled, &face.styles);
 
                         for (&face.styles, 0..) |style, j| {
                             if (style == 255) break;
-                            subsampled[j] *= @as(Vec3, @splat(@floatFromInt(weighting[@intCast(s + 1)][@intCast(t + 1)])));
-                            sampled[j] += subsampled[j];
+                            subsampled[j] = vectorScale(subsampled[j], @floatFromInt(weighting[@intCast(s + 1)][@intCast(t + 1)]));
+                            sampled[j] = vectorAdd(sampled[j], subsampled[j]);
                         }
 
                         subsamples += weighting[@intCast(s + 1)][@intCast(t + 1)];
@@ -1475,7 +1478,7 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
 
             for (&face.styles, 0..) |style, j| {
                 if (style == 255) break;
-                sampled[j] *= @as(Vec3, @splat(1.0 / @as(f32, @floatFromInt(subsamples))));
+                sampled[j] = vectorScale(sampled[j], 1.0 / @as(f32, @floatFromInt(subsamples)));
             }
         } else {
             const pointnormal = getPhongNormal(state, bsp, face_num, spot);
@@ -1497,9 +1500,9 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
             const patch = &state.patches.items[patch_index];
             if (patch.samples > 0) {
                 const scale = 1.0 / @as(f32, @floatFromInt(patch.samples));
-                const v = patch.samplelight * @as(Vec3, @splat(scale));
+                const v = vectorScale(patch.samplelight, scale);
                 patch.totallight = vectorAdd(patch.totallight, v);
-                patch.directlight += v;
+                patch.directlight = vectorAdd(patch.directlight, v);
             }
         }
     }
@@ -1512,8 +1515,9 @@ fn buildFacelights(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp,
         if (style == 0) {
             const first_patch_idx = state.face_patches[face_num].items[0];
             const baselight = state.patches.items[first_patch_idx].baselight;
+            const s = state.facelight[face_num].samples[j];
             for (0..l.numsurfpt) |i| {
-                state.facelight[face_num].samples[j][i].light += baselight;
+                s[i].light = vectorAdd(s[i].light, baselight);
             }
             break;
         }
@@ -1782,12 +1786,12 @@ fn collectLight(state: *State, emitlight: []Vec3, addlight: []Vec3) Vec3 {
         }
 
         patch.totallight = vectorAdd(patch.totallight, addlight[i]);
-        emitlight[i] = addlight[i] * @as(Vec3, @splat(TRANSFER_SCALE));
-        total += emitlight[i];
+        emitlight[i] = vectorScale(addlight[i], TRANSFER_SCALE);
+        total = vectorAdd(total, emitlight[i]);
         addlight[i] = @splat(0);
     }
 
-    total *= @splat(INVERSE_TRANSFER_SCALE);
+    total = vectorScale(total, INVERSE_TRANSFER_SCALE);
     return total;
 }
 
@@ -1797,7 +1801,7 @@ fn gatherLight(state: *State, emitlight: []const Vec3, addlight: []Vec3, patch_n
     var sum: Vec3 = @splat(0);
 
     for (patch.transfers) |trans| {
-        sum += emitlight[trans.patch] * @as(Vec3, @splat(@floatFromInt(trans.transfer)));
+        sum = vectorAdd(sum, vectorScale(emitlight[trans.patch], @floatFromInt(trans.transfer)));
     }
 
     addlight[patch_num] = sum;
@@ -1815,7 +1819,7 @@ fn bounceLight(allocator: std.mem.Allocator, state: *State) !void {
     @memset(addlight, @splat(0));
 
     for (state.patches.items, 0..) |*patch, i| {
-        emitlight[i] = patch.totallight * @as(Vec3, @splat(TRANSFER_SCALE));
+        emitlight[i] = vectorScale(patch.totallight, TRANSFER_SCALE);
     }
 
     for (0..state.numbounce) |i| {
@@ -1927,7 +1931,7 @@ fn findEdge(allocator: std.mem.Allocator, trian: *Triangulation, points: EdgePoi
     try trian.edges.append(allocator, .{
         .p0 = points.p1,
         .p1 = points.p0,
-        .normal = -normal,
+        .normal = vectorSubtract(vec3_origin, normal),
         .dist = -dist,
         .tri = null,
     });
@@ -2066,11 +2070,15 @@ fn lerpTriangle(trian: *Triangulation, tri_index: usize, point: Vec3) Vec3 {
     var result = base;
 
     if (@abs(x2) >= ON_EPSILON) {
-        result = vectorAdd(result, d2 * @as(Vec3, @splat(x / x2)));
+        for (0..3) |i| {
+            result[i] += x * d2[i] / x2;
+        }
     }
 
     if (@abs(y1) >= ON_EPSILON) {
-        result = vectorAdd(result, d1 * @as(Vec3, @splat(y / y1)));
+        for (0..3) |i| {
+            result[i] += y * d1[i] / y1;
+        }
     }
 
     return result;
@@ -2114,20 +2122,24 @@ fn sampleTriangulation(point: Vec3, trian: *Triangulation, last_tri_index: *?usi
         const p1 = trian.points.items[edge.p1];
 
         const v1 = vectorNormalize(vectorSubtract(p1.origin, p0.origin));
-        const v2 = point - p0.origin;
+        const v2 = vectorSubtract(point, p0.origin);
 
         const proj = dotProduct(v2, v1);
         if (proj < 0 or proj > 1)
             continue;
 
-        return p0.totallight + @as(Vec3, @splat(proj)) * vectorSubtract(p1.totallight, p0.totallight);
+        var result: Vec3 = undefined;
+        for (0..3) |i| {
+            result[i] = p0.totallight[i] + d * (p1.totallight[i] - p0.totallight[i]);
+        }
+        return result;
     }
 
     var best: f32 = 99999;
     var p1: ?*Patch = null;
 
     for (trian.points.items) |p0| {
-        const v1 = point - p0.origin;
+        const v1 = vectorSubtract(point, p0.origin);
         const d = vectorLength(v1);
 
         if (d < best) {
@@ -2203,18 +2215,21 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
     for (0..lightstyles) |k| {
         var last_tri: ?usize = null;
         for (facelight.samples[k], 0..) |sample, j| {
-            var lb = sample.light * @as(Vec3, @splat(2.0));
+            var lb = vectorScale(sample.light, 2.0);
 
             if (state.numbounce > 0 and k == 0)
-                lb += try sampleTriangulation(sample.pos, trian, &last_tri);
+                lb = vectorAdd(lb, try sampleTriangulation(sample.pos, trian, &last_tri));
 
-            lb *= @splat(state.lightscale);
+            lb = vectorScale(lb, state.lightscale);
 
-            lb = @max(lb, @as(Vec3, @splat(minlight)));
+            for (0..3) |i| {
+                if (lb[i] < minlight)
+                    lb[i] = minlight;
+            }
 
-            const max: f32 = @reduce(.Max, lb);
+            const max = vectorMaximum(lb);
             if (max > state.maxlight) {
-                lb *= @splat(state.maxlight / max);
+                lb = vectorScale(lb, state.maxlight / max);
             }
 
             if (state.gamma != 1.0) {
@@ -2224,11 +2239,9 @@ fn finalLightFace(allocator: std.mem.Allocator, state: *State, bsp: *const Bsp, 
 
             const base = @as(usize, @intCast(face.lightofs)) + k * facelight.samples[0].len * 3 + j * 3;
 
-            const clamped = @min(@max(lb, @as(Vec3, @splat(0.0))), @as(Vec3, @splat(255.0)));
-
-            bsp.lightdata[base + 0] = @trunc(clamped[0]);
-            bsp.lightdata[base + 1] = @trunc(clamped[1]);
-            bsp.lightdata[base + 2] = @trunc(clamped[2]);
+            bsp.lightdata[base + 0] = @trunc(lb[0]);
+            bsp.lightdata[base + 1] = @trunc(lb[1]);
+            bsp.lightdata[base + 2] = @trunc(lb[2]);
         }
     }
 
