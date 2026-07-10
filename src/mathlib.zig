@@ -1,5 +1,5 @@
-// pub const Vec3 = @Vector(3, f32);
-pub const Vec3 = [3]f32;
+pub const Vec3 = @Vector(3, f32);
+// pub const Vec3 = [3]f32;
 
 pub fn vectorAdd(a: [3]f32, b: [3]f32) [3]f32 {
     return .{
@@ -57,7 +57,7 @@ pub fn vectorNormalize(v: Vec3) Vec3 {
 
 pub fn vectorLength(v: Vec3) f32 {
     var length: f32 = 0;
-    for (0..3) |i|
+    inline for (0..3) |i|
         length += v[i] * v[i];
     return @sqrt(length);
 }
@@ -66,7 +66,7 @@ pub const ON_EPSILON = 0.01;
 pub const EQUAL_EPSILON = 0.001;
 
 pub fn vectorCompare(a: Vec3, b: Vec3) bool {
-    for (0..3) |i| {
+    inline for (0..3) |i| {
         if (@abs(a[i] - b[i]) > EQUAL_EPSILON)
             return false;
     }

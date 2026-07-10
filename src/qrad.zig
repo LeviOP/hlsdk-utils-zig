@@ -926,7 +926,7 @@ fn calcFaceVectors(bsp: *const Bsp, l: *LightInfo) !void {
         l.textoworld[i] = vectorScale(vectorMA(l.worldtotex[i], -dist, texnormal), (1.0 / len) * (1.0 / len));
     }
 
-    for (0..3) |i| {
+    inline for (0..3) |i| {
         l.texorg[i] =
             -texinfo.vecs[0][3] * l.textoworld[0][i] -
             texinfo.vecs[1][3] * l.textoworld[1][i];
@@ -1008,7 +1008,7 @@ fn calcPoints(state: *State, bsp: *const Bsp, l: *LightInfo) void {
             for (0..64) |i| {
                 const idx = t * w + s;
 
-                for (0..3) |j| {
+                inline for (0..3) |j| {
                     l.surfpt[idx][j] =
                         l.texorg[j] +
                         l.textoworld[0][j] * us +
@@ -2129,7 +2129,7 @@ fn sampleTriangulation(point: Vec3, trian: *Triangulation, last_tri_index: *?usi
             continue;
 
         var result: Vec3 = undefined;
-        for (0..3) |i| {
+        inline for (0..3) |i| {
             result[i] = p0.totallight[i] + d * (p1.totallight[i] - p0.totallight[i]);
         }
         return result;
