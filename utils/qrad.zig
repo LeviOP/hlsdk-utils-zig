@@ -17,21 +17,6 @@ pub fn main(init: std.process.Init) !u8 {
     const allocator = init.gpa;
     const io = init.io;
 
-    // var mxcsr: u32 = 0;
-    // asm volatile ("stmxcsr (%[ptr])"
-    //     :
-    //     : [ptr] "r" (&mxcsr),
-    //     : .{ .memory = true }
-    // );
-    //
-    // mxcsr |= (1 << 15) | (1 << 6); // FTZ | DAZ
-    //
-    // asm volatile ("ldmxcsr (%[ptr])"
-    //     :
-    //     : [ptr] "r" (&mxcsr),
-    //     : .{ .memory = true }
-    // );
-
     const args = try init.minimal.args.toSlice(allocator);
     defer allocator.free(args);
 
@@ -56,12 +41,13 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "-bounce")) {
             i += 1;
             if (i < args.len) {
-                state.numbounce = @intCast(c.atoi(args[i]));
+                const numbounce = c.atoi(args[i]);
 
-                if (state.numbounce < 0) {
+                if (numbounce < 0) {
                     std.debug.print("Error: expected non-negative value after '-bounce'\n", .{});
                     return 1;
                 }
+                state.numbounce = @intCast(numbounce);
             } else {
                 std.debug.print("Error: expected a value after '-bounce'\n", .{});
                 return 1;
@@ -73,12 +59,12 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "-threads")) {
             i += 1;
             if (i < args.len) {
-                // state.numthreads = c.atoi(args[i]);
-                //
-                // if (state.numthreads <= 0) {
-                //     std.debug.print("Error: expected positive value after '-threads'\n", .{});
-                //     return 1;
-                // }
+                const numthreads = c.atoi(args[i]);
+                if (numthreads <= 0) {
+                    std.debug.print("Error: expected positive value after '-threads'\n", .{});
+                    return 1;
+                }
+                state.numthreads = @intCast(numthreads);
             } else {
                 std.debug.print("Error: expected a value after '-threads'\n", .{});
                 return 1;
@@ -217,13 +203,18 @@ pub fn main(init: std.process.Init) !u8 {
             break;
         }
     }
+    if (i != args.len - 1) {
+        qError("usage: qrad [-dump] [-inc] [-bounce n] [-threads n] [-verbose] [-terse] [-chop n] [-maxchop n] [-scale n] [-ambient red green blue] [-proj file] [-maxlight n] [-threads n] [-lights file] [-gamma n] [-dlight n] [-extra] [-smooth n] [-coring n] [-notexscale] bspfile", .{}, error.QError) catch return 1;
+    }
 
     if (state.maxlight > 255)
         state.maxlight = 255;
 
-    if (i != args.len - 1) {
-        qError("usage: qrad [-dump] [-inc] [-bounce n] [-threads n] [-verbose] [-terse] [-chop n] [-maxchop n] [-scale n] [-ambient red green blue] [-proj file] [-maxlight n] [-threads n] [-lights file] [-gamma n] [-dlight n] [-extra] [-smooth n] [-coring n] [-notexscale] bspfile", .{}, error.QError) catch return 1;
+    if (state.numthreads == 0) {
+        state.numthreads = try std.Thread.getCpuCount();
     }
+
+    state.print("{d} threads\n", .{state.numthreads});
 
     if (args[i].len >= MAX_PATH) return error.PathCopyUnsafeOverflow;
     var source = cmdlib.stripExtension(args[i]);

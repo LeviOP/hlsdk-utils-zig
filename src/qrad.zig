@@ -20,6 +20,9 @@ const crossProduct = mathlib.crossProduct;
 const Vec3 = mathlib.Vec3;
 const qError = @import("cmdlib.zig").qError;
 const r_avertexnormals = @import("anorms.zig").r_avertexnormals;
+const threads = @import("threads.zig");
+const runThreadsOnIndividual = threads.runThreadsOnIndividual;
+const runThreadsOn = threads.runThreadsOn;
 
 const vec3_origin: Vec3 = .{ 0, 0, 0 };
 
@@ -1586,12 +1589,12 @@ fn buildVisLeafs(
     state: *State,
     bsp: *const Bsp,
     vismatrix: []u8,
+    pool: *threads.WorkPool,
 ) void {
     var pvs: [(MAX_MAP_LEAFS + 7) / 8]u8 = undefined;
 
-    // leaf 0 is the solid leaf (skipped)
-    for (1..bsp.leafs.len) |i| {
-        const srcleaf = &bsp.leafs[i];
+    while (pool.next()) |i| {
+        const srcleaf = &bsp.leafs[i + 1]; // skip solid leaf 0
 
         if (srcleaf.visofs < 0) continue;
 
@@ -1637,7 +1640,7 @@ fn buildVisMatrix(
     const vismatrix = try allocator.alloc(u8, count);
     @memset(vismatrix, 0);
 
-    buildVisLeafs(state, bsp, vismatrix);
+    try runThreadsOn(allocator, state.numthreads, bsp.leafs.len - 1, buildVisLeafs, .{ state, bsp, vismatrix });
 
     return vismatrix;
 }
@@ -1650,12 +1653,18 @@ fn checkVisBit(vismatrix: []const u8, num_patches: usize, p1_in: usize, p2_in: u
     return (vismatrix[bitpos >> 3] & (@as(u8, 1) << shift)) != 0;
 }
 
-// TODO: make each call an iteration of thread, not one call for entire thread (matching gatherLight, etc)
-fn makeScales(allocator: std.mem.Allocator, state: *State, vismatrix: []const u8) !usize {
+fn makeScales(
+    allocator: std.mem.Allocator,
+    state: *State,
+    vismatrix: []const u8,
+    total_transfer: *std.atomic.Value(usize),
+    pool: *threads.WorkPool,
+) !void {
     const num_patches = state.patches.items.len;
-    var total_transfer: usize = 0;
+    var count: usize = 0;
 
-    for (state.patches.items, 0..) |*patch, i| {
+    while (pool.next()) |i| {
+        const patch = &state.patches.items[i];
         const origin = patch.origin;
         var plane = patch.plane.*;
         plane.dist = patchPlaneDist(state, patch);
@@ -1697,7 +1706,7 @@ fn makeScales(allocator: std.mem.Allocator, state: *State, vismatrix: []const u8
                 .patch = @intCast(j),
             };
             num_transfers += 1;
-            total_transfer += 1;
+            count += 1;
         }
 
         if (num_transfers > 0) {
@@ -1716,7 +1725,7 @@ fn makeScales(allocator: std.mem.Allocator, state: *State, vismatrix: []const u8
         }
     }
 
-    return total_transfer;
+    _ = total_transfer.fetchAdd(count, .monotonic);
 }
 
 fn makeAllScales(
@@ -1727,10 +1736,17 @@ fn makeAllScales(
     const vismatrix = try buildVisMatrix(allocator, state, bsp);
     defer allocator.free(vismatrix);
 
-    const total_transfer = try makeScales(allocator, state, vismatrix);
+    var total_transfer = std.atomic.Value(usize).init(0);
+    try runThreadsOn(
+        allocator,
+        state.numthreads,
+        state.patches.items.len,
+        makeScales,
+        .{ allocator, state, vismatrix, &total_transfer },
+    );
 
     state.print("transfer lists: {d:5.1} megs\n", .{
-        @as(f32, @floatFromInt(total_transfer * @sizeOf(Transfer))) / (1024 * 1024.0),
+        @as(f32, @floatFromInt(total_transfer.load(.monotonic) * @sizeOf(Transfer))) / (1024 * 1024.0),
     });
 }
 
@@ -1823,9 +1839,13 @@ fn bounceLight(allocator: std.mem.Allocator, state: *State) !void {
     }
 
     for (0..state.numbounce) |i| {
-        for (0..state.patches.items.len) |j| {
-            gatherLight(state, emitlight, addlight, j);
-        }
+        try runThreadsOnIndividual(
+            allocator,
+            state.numthreads,
+            state.patches.items.len,
+            gatherLight,
+            .{ state, emitlight, addlight },
+        );
 
         const added = collectLight(state, emitlight, addlight);
         state.print("\tBounce #{d} added RGB({d:.0}, {d:.0}, {d:.0})\n", .{
@@ -2303,6 +2323,12 @@ pub const State = struct {
     coring: f32 = 1.0,
     texscale: bool = true,
 
+    // threads.h
+    // 0 semantically means unset, unlike -1 which meant unset in the original c code.
+    // It would be nice if we could have ?u32 with some kind of NonZero u32, but this
+    // hasn't happened yet... https://github.com/ziglang/zig/issues/3806
+    numthreads: usize = 0,
+
     // cmdlib.h
     verbose: bool = false,
 
@@ -2378,9 +2404,7 @@ pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
         }
         allocator.free(state.facelight);
     }
-    for (0..bsp.faces.len) |i| {
-        try buildFacelights(allocator, state, bsp, i);
-    }
+    try runThreadsOnIndividual(allocator, state.numthreads, bsp.faces.len, buildFacelights, .{ allocator, state, bsp });
 
     // DeleteDirectLights
     {
@@ -2394,9 +2418,7 @@ pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
     if (state.numbounce > 0) {
         try makeAllScales(allocator, state, bsp);
 
-        for (0..state.patches.items.len) |i| {
-            try swapTransfersTask(state, i);
-        }
+        try runThreadsOnIndividual(allocator, state.numthreads, state.patches.items.len, swapTransfersTask, .{state});
 
         try bounceLight(allocator, state);
         // free transfers
@@ -2420,9 +2442,13 @@ pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
     @memset(new_lightdata, 0);
     bsp.lightdata = new_lightdata;
 
-    for (0..bsp.faces.len) |face_num| {
-        try finalLightFace(allocator, state, bsp, face_num);
-    }
+    try runThreadsOnIndividual(
+        allocator,
+        state.numthreads,
+        bsp.faces.len,
+        finalLightFace,
+        .{ allocator, state, bsp },
+    );
 }
 
 pub fn readLightFile(allocator: std.mem.Allocator, io: std.Io, state: *State, filename: []const u8) !void {
