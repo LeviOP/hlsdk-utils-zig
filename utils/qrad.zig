@@ -6,7 +6,6 @@ const hlsdk_utils = @import("hlsdk_utils");
 const Bsp = hlsdk_utils.Bsp;
 const cmdlib = hlsdk_utils.cmdlib;
 const qError = cmdlib.qError;
-const handleQError = cmdlib.handleQError;
 const MAX_PATH = cmdlib.MAX_PATH;
 const qrad = hlsdk_utils.qrad;
 const State = qrad.State;
@@ -204,7 +203,7 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     if (i != args.len - 1) {
-        qError("usage: qrad [-dump] [-inc] [-bounce n] [-threads n] [-verbose] [-terse] [-chop n] [-maxchop n] [-scale n] [-ambient red green blue] [-proj file] [-maxlight n] [-threads n] [-lights file] [-gamma n] [-dlight n] [-extra] [-smooth n] [-coring n] [-notexscale] bspfile", .{}, error.QError) catch return 1;
+        return qError("usage: qrad [-dump] [-inc] [-bounce n] [-threads n] [-verbose] [-terse] [-chop n] [-maxchop n] [-scale n] [-ambient red green blue] [-proj file] [-maxlight n] [-threads n] [-lights file] [-gamma n] [-dlight n] [-extra] [-smooth n] [-coring n] [-notexscale] bspfile", .{}, error.IncorrectUsage);
     }
 
     if (state.maxlight > 255)
@@ -231,20 +230,20 @@ pub fn main(init: std.process.Init) !u8 {
     };
     defer allocator.free(level_lights);
 
-    readLightFile(allocator, io, state, global_lights) catch |e| return handleQError(e);
+    try readLightFile(allocator, io, state, global_lights);
     defer {
         for (state.texlights) |texlight| {
             allocator.free(texlight.filename);
         }
         allocator.free(state.texlights);
     }
-    if (designer_lights.len != 0) readLightFile(allocator, io, state, designer_lights) catch |e| return handleQError(e);
-    if (level_lights.len != 0) readLightFile(allocator, io, state, level_lights) catch |e| return handleQError(e);
+    if (designer_lights.len != 0) try readLightFile(allocator, io, state, designer_lights);
+    if (level_lights.len != 0) try readLightFile(allocator, io, state, level_lights);
 
     source = try cmdlib.defaultExtension(allocator, source, ".bsp");
     defer allocator.free(source);
 
-    var bsp = Bsp.init(allocator, io, source) catch |e| return handleQError(e);
+    var bsp = try Bsp.init(allocator, io, source);
     defer bsp.deinit(allocator);
 
     state.entities = try bsp.parseEntities(allocator);
@@ -262,13 +261,13 @@ pub fn main(init: std.process.Init) !u8 {
     try state.setupRad(allocator, &bsp);
     defer state.deinit(allocator);
 
-    radWorld(allocator, state, &bsp) catch |e| return handleQError(e);
+    try radWorld(allocator, state, &bsp);
     defer allocator.free(bsp.lightdata); // free new lightdata
 
     if (state.verbose)
         bsp.printFileSizes();
 
-    bsp.writeFile(io, source) catch |e| return handleQError(e);
+    try bsp.writeFile(io, source);
 
     return 0;
 }

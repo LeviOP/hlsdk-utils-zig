@@ -1,10 +1,14 @@
 const std = @import("std");
 
 pub const WorkPool = struct {
-    counter: std.atomic.Value(usize),
+    counter: std.atomic.Value(usize) = .init(0),
     total: usize,
+    errored: std.atomic.Value(bool) = .init(false),
+    @"error": std.atomic.Value(u16) = .init(0),
 
     pub fn next(self: *WorkPool) ?usize {
+        if (self.errored.load(.monotonic)) return null;
+
         const i = self.counter.fetchAdd(1, .monotonic);
         if (i >= self.total) return null;
         return i;
@@ -46,7 +50,7 @@ pub fn runThreadsOn(
     comptime func: anytype,
     args: anytype,
 ) !void {
-    var pool = WorkPool{ .counter = std.atomic.Value(usize).init(0), .total = workcount };
+    var pool = WorkPool{ .total = workcount };
     const Args = @TypeOf(args);
 
     const ReturnType = @typeInfo(@TypeOf(func)).@"fn".return_type.?;
@@ -57,8 +61,8 @@ pub fn runThreadsOn(
             const full_args = a ++ .{p};
             if (comptime returns_error) {
                 @call(.auto, func, full_args) catch |err| {
-                    std.debug.print("worker err: {}\n", .{err});
-                    return;
+                    const won = p.errored.cmpxchgStrong(false, true, .acq_rel, .acquire) == null;
+                    if (won) p.@"error".store(@intFromError(err), .release);
                 };
             } else {
                 @call(.auto, func, full_args);
@@ -72,4 +76,8 @@ pub fn runThreadsOn(
         t.* = try std.Thread.spawn(.{}, worker, .{ args, &pool });
     }
     for (threads) |t| t.join();
+
+    if (pool.errored.load(.monotonic)) {
+        return @errorFromInt(pool.@"error".load(.monotonic));
+    }
 }

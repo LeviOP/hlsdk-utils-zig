@@ -15,24 +15,14 @@ inline fn pathSeparator(c: u8) bool {
     };
 }
 
-pub fn qError(comptime fmt: []const u8, args: anytype, err: anyerror) anyerror {
+pub fn qError(comptime fmt: []const u8, args: anytype, err: anyerror) if (config.print_errors) noreturn else anyerror {
     if (comptime config.print_errors) {
         std.debug.print("\n************ ERROR ************\n", .{});
         std.debug.print(fmt ++ "\n", args);
-        return error.QError;
+        std.process.exit(1);
     }
 
     return err;
-}
-
-pub inline fn handleQError(err: anyerror) !u8 {
-    if (comptime !config.print_errors) {
-        return err;
-    }
-    return switch (err) {
-        error.QError => 1,
-        else => err,
-    };
 }
 
 pub fn stripExtension(path: []const u8) []const u8 {

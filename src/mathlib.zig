@@ -25,14 +25,6 @@ pub fn vectorScale(a: [3]f32, scale: f32) [3]f32 {
     };
 }
 
-pub fn vectorMultiply(a: [3]f32, b: [3]f32) [3]f32 {
-    return .{
-        a[0] * b[0],
-        a[1] * b[1],
-        a[2] * b[2],
-    };
-}
-
 pub fn vectorMA(a: [3]f32, scale: f32, b: [3]f32) [3]f32 {
     return .{
         a[0] + scale * b[0],
