@@ -1,4 +1,5 @@
-pub const Vec3 = @Vector(3, f32);
+// pub const Vec3 = @Vector(3, f32);
+pub const Vec3 = [3]f32;
 
 pub fn vectorAdd(a: [3]f32, b: [3]f32) [3]f32 {
     return .{
@@ -24,26 +25,52 @@ pub fn vectorScale(a: [3]f32, scale: f32) [3]f32 {
     };
 }
 
+pub fn vectorMultiply(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{
+        a[0] * b[0],
+        a[1] * b[1],
+        a[2] * b[2],
+    };
+}
+
+pub fn vectorMA(a: [3]f32, scale: f32, b: [3]f32) [3]f32 {
+    return .{
+        a[0] + scale * b[0],
+        a[1] + scale * b[1],
+        a[2] + scale * b[2],
+    };
+}
+
 pub fn dotProduct(a: Vec3, b: Vec3) f32 {
-    return @reduce(.Add, a * b);
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
 pub fn vectorNormalize(v: Vec3) Vec3 {
-    const len = @sqrt(@reduce(.Add, v * v));
+    const len = vectorLength(v);
     if (len == 0) return v;
-    return v / @as(Vec3, @splat(len));
+    return .{
+        v[0] / len,
+        v[1] / len,
+        v[2] / len,
+    };
 }
 
 pub fn vectorLength(v: Vec3) f32 {
-    return @sqrt(@reduce(.Add, v * v));
+    var length: f32 = 0;
+    for (0..3) |i|
+        length += v[i] * v[i];
+    return @sqrt(length);
 }
 
 pub const ON_EPSILON = 0.01;
 pub const EQUAL_EPSILON = 0.001;
 
 pub fn vectorCompare(a: Vec3, b: Vec3) bool {
-    const diff = @abs(a - b);
-    return @reduce(.And, diff <= @as(Vec3, @splat(EQUAL_EPSILON)));
+    for (0..3) |i| {
+        if (@abs(a[i] - b[i]) > EQUAL_EPSILON)
+            return false;
+    }
+    return true;
 }
 
 pub fn vectorAvg(v: Vec3) f32 {
