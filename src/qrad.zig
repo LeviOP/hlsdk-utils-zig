@@ -1557,12 +1557,13 @@ fn buildVisRow(
     state: *State,
     bsp: *const Bsp,
     vismatrix: []u8,
-    patchnum: usize,
+    patch_num: usize,
     pvs: []const u8,
     head: i32,
     bitpos: usize,
+    face_tested: []bool,
 ) void {
-    var face_tested: [MAX_MAP_FACES]u8 = @splat(0);
+    @memset(face_tested, false);
 
     // leaf 0 is the solid leaf (skipped)
     for (1..bsp.leafs.len) |j| {
@@ -1572,20 +1573,24 @@ fn buildVisRow(
         const leaf = &bsp.leafs[j];
         for (0..leaf.nummarksurfaces) |k| {
             const l = bsp.marksurfaces[leaf.firstmarksurface + k];
-            if (face_tested[l] != 0) continue;
-            face_tested[l] = 1;
-            testPatchToFace(state, vismatrix, patchnum, l, head, bitpos);
+            if (face_tested[l]) continue;
+            face_tested[l] = true;
+            testPatchToFace(state, vismatrix, patch_num, l, head, bitpos);
         }
     }
 }
 
 fn buildVisLeafs(
+    allocator: std.mem.Allocator,
     state: *State,
     bsp: *const Bsp,
     vismatrix: []u8,
+    patch_leaf: []*align(1) const Bsp.Leaf,
     pool: *threads.WorkPool,
-) void {
+) !void {
     var pvs: [(MAX_MAP_LEAFS + 7) / 8]u8 = undefined;
+    const face_tested = try allocator.alloc(bool, bsp.faces.len);
+    defer allocator.free(face_tested);
 
     while (pool.next()) |i| {
         const srcleaf = &bsp.leafs[i + 1]; // skip solid leaf 0
@@ -1600,21 +1605,17 @@ fn buildVisLeafs(
             const face_num = bsp.marksurfaces[srcleaf.firstmarksurface + lface];
             const patch_indices = state.face_patches[face_num];
 
-            for (patch_indices.items) |pi| {
-                const patch = &state.patches.items[pi];
+            for (patch_indices.items) |patch_num| {
+                if (patch_leaf[patch_num] != srcleaf) continue;
 
-                const leaf = pointInLeaf(bsp, patch.origin);
-                if (leaf != srcleaf) continue;
+                const bitpos = patch_num * state.patches.items.len - (patch_num * (patch_num + 1)) / 2;
 
-                const patchnum = pi;
-                const bitpos = patchnum * state.patches.items.len - (patchnum * (patchnum + 1)) / 2;
-
-                buildVisRow(state, bsp, vismatrix, patchnum, &pvs, head, bitpos);
+                buildVisRow(state, bsp, vismatrix, patch_num, &pvs, head, bitpos, face_tested);
 
                 // build to bmodel faces
                 if (bsp.models.len < 2) continue;
                 for (@as(usize, @intCast(bsp.models[1].firstface))..bsp.faces.len) |face_num_2| {
-                    testPatchToFace(state, vismatrix, patchnum, @intCast(face_num_2), head, bitpos);
+                    testPatchToFace(state, vismatrix, patch_num, @intCast(face_num_2), head, bitpos);
                 }
             }
         }
@@ -1635,7 +1636,13 @@ fn buildVisMatrix(
     @memset(vismatrix, 0);
     errdefer allocator.free(vismatrix);
 
-    try runThreadsOn(allocator, state.numthreads, bsp.leafs.len - 1, buildVisLeafs, .{ state, bsp, vismatrix });
+    const patch_leaf = try allocator.alloc(*align(1) const Bsp.Leaf, state.patches.items.len);
+    defer allocator.free(patch_leaf);
+    for (state.patches.items, 0..) |*patch, pi| {
+        patch_leaf[pi] = pointInLeaf(bsp, patch.origin);
+    }
+
+    try runThreadsOn(allocator, state.numthreads, bsp.leafs.len - 1, buildVisLeafs, .{ allocator, state, bsp, vismatrix, patch_leaf });
 
     return vismatrix;
 }
