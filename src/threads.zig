@@ -18,19 +18,32 @@ pub const WorkPool = struct {
 pub fn runThreadsOnIndividual(
     allocator: std.mem.Allocator,
     numthreads: usize,
-    workcount: usize,
+    workcount: anytype,
     comptime item_func: anytype,
     args: anytype,
 ) !void {
     const Args = @TypeOf(args);
 
-    const ReturnType = @typeInfo(@TypeOf(item_func)).@"fn".return_type.?;
+    const FnInfo = @typeInfo(@TypeOf(item_func)).@"fn";
+    const ReturnType = FnInfo.return_type.?;
     const returns_error = @typeInfo(ReturnType) == .error_union;
+
+    const IndexType = FnInfo.params[FnInfo.params.len - 1].type.?;
+    const WorkcountType = @TypeOf(workcount);
+
+    comptime {
+        if (WorkcountType != IndexType) {
+            @compileError(std.fmt.comptimePrint(
+                "found type '{s}', but the item function expected index type '{s}'",
+                .{ @typeName(WorkcountType), @typeName(IndexType) },
+            ));
+        }
+    }
 
     const worker = struct {
         fn run(a: Args, pool: *WorkPool) !void {
             while (pool.next()) |i| {
-                const full_args = a ++ .{i};
+                const full_args = a ++ .{@as(IndexType, @intCast(i))};
                 if (comptime returns_error) {
                     try @call(.auto, item_func, full_args);
                 } else {
@@ -40,7 +53,7 @@ pub fn runThreadsOnIndividual(
         }
     }.run;
 
-    try runThreadsOn(allocator, numthreads, workcount, worker, .{args});
+    try runThreadsOn(allocator, numthreads, @as(usize, @intCast(workcount)), worker, .{args});
 }
 
 pub fn runThreadsOn(
