@@ -2148,7 +2148,7 @@ fn sampleTriangulation(point: Vec3, trian: *Triangulation, last_tri_index: *?u16
 
         var result: Vec3 = undefined;
         for (0..3) |i| {
-            result[i] = p0.totallight[i] + d * (p1.totallight[i] - p0.totallight[i]);
+            result[i] = p0.totallight[i] + proj * (p1.totallight[i] - p0.totallight[i]);
         }
         return result;
     }
