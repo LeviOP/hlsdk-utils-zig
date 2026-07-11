@@ -4,7 +4,7 @@ pub const WorkPool = struct {
     counter: std.atomic.Value(usize) = .init(0),
     total: usize,
     errored: std.atomic.Value(bool) = .init(false),
-    @"error": std.atomic.Value(u16) = .init(0),
+    @"error": std.atomic.Value(u16) = .init(undefined),
 
     pub fn next(self: *WorkPool) ?usize {
         if (self.errored.load(.monotonic)) return null;
@@ -61,8 +61,15 @@ pub fn runThreadsOn(
             const full_args = a ++ .{p};
             if (comptime returns_error) {
                 @call(.auto, func, full_args) catch |err| {
-                    const won = p.errored.cmpxchgStrong(false, true, .acq_rel, .acquire) == null;
-                    if (won) p.@"error".store(@intFromError(err), .release);
+                    if (p.errored.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
+                        p.@"error".store(@intFromError(err), .release);
+                        if (@errorReturnTrace()) |trace| {
+                            std.debug.dumpStackTrace(&.{
+                                .return_addresses = trace.instruction_addresses[0..trace.index],
+                                .skipped = .none
+                            });
+                        }
+                    }
                 };
             } else {
                 @call(.auto, func, full_args);

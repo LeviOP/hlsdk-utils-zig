@@ -1651,6 +1651,7 @@ fn buildVisMatrix(
 
     const vismatrix = try allocator.alloc(u8, count);
     @memset(vismatrix, 0);
+    errdefer allocator.free(vismatrix);
 
     try runThreadsOn(allocator, state.numthreads, bsp.leafs.len - 1, buildVisLeafs, .{ state, bsp, vismatrix });
 
@@ -1748,6 +1749,15 @@ fn makeAllScales(
     const vismatrix = try buildVisMatrix(allocator, state, bsp);
     defer allocator.free(vismatrix);
 
+    // free transfers on error (created by makeScales)
+    errdefer {
+        for (state.patches.items) |*patch| {
+            if (patch.transfers.len > 0) {
+                allocator.free(patch.transfers);
+                patch.transfers = &.{};
+            }
+        }
+    }
     var total_transfer = std.atomic.Value(usize).init(0);
     try runThreadsOn(
         allocator,
@@ -2395,15 +2405,18 @@ pub const State = struct {
     }
 };
 
+pub fn deleteDirectLights(allocator: std.mem.Allocator, state: *State) void {
+    var it = state.directlights.valueIterator();
+    while (it.next()) |lights| {
+        lights.deinit(allocator);
+    }
+    state.directlights.deinit(allocator);
+    state.directlights = .empty;
+}
+
 pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
     state.directlights = try createDirectLights(allocator, state, bsp);
-    errdefer {
-        var it = state.directlights.valueIterator();
-        while (it.next()) |lights| {
-            lights.deinit(allocator);
-        }
-        state.directlights.deinit(allocator);
-    }
+    errdefer deleteDirectLights(allocator, state);
 
     state.facelight = try allocator.alloc(Facelight, bsp.faces.len);
     @memset(state.facelight, .{});
@@ -2418,14 +2431,7 @@ pub fn radWorld(allocator: std.mem.Allocator, state: *State, bsp: *Bsp) !void {
     }
     try runThreadsOnIndividual(allocator, state.numthreads, bsp.faces.len, buildFacelights, .{ allocator, state, bsp });
 
-    // DeleteDirectLights
-    {
-        var it = state.directlights.valueIterator();
-        while (it.next()) |lights| {
-            lights.deinit(allocator);
-        }
-        state.directlights.deinit(allocator);
-    }
+    deleteDirectLights(allocator, state);
 
     if (state.numbounce > 0) {
         try makeAllScales(allocator, state, bsp);
